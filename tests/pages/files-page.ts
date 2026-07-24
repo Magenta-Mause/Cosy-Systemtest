@@ -33,6 +33,23 @@ export class FilesPage {
     return this.page.getByRole('button', { name: 'New Directory' });
   }
 
+  /**
+   * The mkdir/rename dialog inputs are controlled React inputs (value + onChange);
+   * their submit handlers validate the *committed* state, so a single fill() event
+   * that doesn't commit leaves the name empty and the submit silently no-ops. Drive
+   * them with real keystrokes and assert the value stuck (fail fast, not a hang).
+   */
+  private async typeInto(locator: Locator, value: string, what: string): Promise<void> {
+    await locator.click();
+    await locator.press('ControlOrMeta+a');
+    await locator.press('Delete');
+    await locator.pressSequentially(value);
+    await expect(
+      locator,
+      `${what}: value "${value}" did not persist in the controlled dialog input.`,
+    ).toHaveValue(value, { timeout: UI_ACTION_TIMEOUT_MS });
+  }
+
   /** The visible name cell of a file/directory row. */
   private entry(name: string): Locator {
     // The filename renders in its own text node; the row's action buttons carry the
@@ -54,7 +71,7 @@ export class FilesPage {
     await this.newFolderButton.click();
     const dialog = this.page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await dialog.getByRole('textbox').fill(name);
+    await this.typeInto(dialog.getByRole('textbox'), name, 'new folder name');
     // MkdirDialog submit label is "Create" (createAction).
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     await expect(dialog).toBeHidden({ timeout: UI_ACTION_TIMEOUT_MS });
@@ -65,7 +82,7 @@ export class FilesPage {
     await this.page.getByRole('button', { name: `Rename ${name}` }).click();
     const dialog = this.page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await dialog.getByRole('textbox').fill(newName);
+    await this.typeInto(dialog.getByRole('textbox'), newName, 'rename target name');
     await dialog.getByRole('button', { name: 'Rename', exact: true }).click();
     await expect(dialog).toBeHidden({ timeout: UI_ACTION_TIMEOUT_MS });
   }

@@ -4,16 +4,26 @@ import { SERVER_START_TIMEOUT_MS, UI_ACTION_TIMEOUT_MS } from '@helpers/constant
 
 /**
  * The three-step create-server wizard, derived from the RELEASED frontend
- * (revision 5dba6e8, the image pinned by installer v1.0.3) — its flow differs
- * from main:
+ * (revision 5dba6e8, the image pinned by installer v1.0.3):
  *   Step 1 "Choose name and Game"  — server name + optional game → "Next Step"
  *   Step 2 "Choose Template"        — none for a generic game → "Continue without Template"
  *   Step 3 "Configure your Server"  — Docker image (+ RAM, + optional volume) →
  *                                     "Create Server" → confirm dialog
  *
- * Form fields carry stable `id`s (`server_name`, `docker_image_name`,
- * `docker_max_memory`); the optional volume-mount row is matched by its `/data`
- * placeholder. Other controls are matched by their (English) button text. No
+ * INPUT HANDLING — why keystrokes, not fill(): every wizard field is a *fully
+ * controlled* React input (`value={gameServerState[attr]}`, onChange →
+ * setGameServerState). Step advance buttons are enabled only when
+ * GenericGameServerCreationPage sees each attribute touched AND valid, both derived
+ * from the committed `gameServerState`. Playwright's `fill()` dispatches a single
+ * synthetic `input` event which does not reliably commit into that controlled state
+ * (the binding snaps the DOM value back to empty), so validation never satisfies and
+ * the advance button stays `disabled`. `pressSequentially()` fires a real event per
+ * keystroke — like a user — and commits. We then assert the value persisted and the
+ * advance button became enabled, so a regression fails in seconds with a clear
+ * message instead of hanging on actionability.
+ *
+ * Fields carry stable `id`s (`server_name`, `docker_image_name`, `docker_max_memory`);
+ * the optional volume-mount row is matched by its `/data` placeholder. No
  * `data-testid`s exist in this release — see docs/testid-gaps.md.
  */
 export class CreateServerPage {
@@ -28,10 +38,33 @@ export class CreateServerPage {
     return this.dialog.locator(`#${id}`);
   }
 
+  /** Enter text into a controlled input via real keystrokes and assert it stuck. */
+  private async typeInto(locator: Locator, value: string, what: string): Promise<void> {
+    await locator.click();
+    await locator.press('ControlOrMeta+a');
+    await locator.press('Delete');
+    await locator.pressSequentially(value);
+    await expect(
+      locator,
+      `${what}: value "${value}" did not persist — the controlled React input never ` +
+        `committed to gameServerState (a fill()-style single-event write was reverted).`,
+    ).toHaveValue(value, { timeout: UI_ACTION_TIMEOUT_MS });
+  }
+
+  /** Assert a wizard advance button is enabled (fail fast) and click it. */
+  private async advance(label: string, step: string, exact = false): Promise<void> {
+    const btn = this.dialog.getByRole('button', { name: label, exact });
+    await expect(
+      btn,
+      `${step}: "${label}" never became enabled — wizard step validation was not ` +
+        `satisfied (a required controlled input did not register as touched+valid).`,
+    ).toBeEnabled({ timeout: UI_ACTION_TIMEOUT_MS });
+    await btn.click();
+  }
+
   /**
    * Full flow: create a server with a custom Docker image + memory limit (and an
-   * optional volume mount) and confirm creation. Leaves the SuccessDialog open
-   * (caller can open the server).
+   * optional volume mount) and confirm creation. Leaves the SuccessDialog open.
    */
   async createWithCustomImage(opts: {
     serverName: string;
@@ -41,28 +74,27 @@ export class CreateServerPage {
     /** Optional container path for a volume mount, e.g. "/data" — needed for file ops. */
     volumeMount?: string;
   }): Promise<void> {
-    // Step 1 "Choose name and Game": name the server. The game field is optional
-    // (leaving it empty falls back to a generic game with no templates); its
-    // validator always passes, so "Next Step" enables once the name is filled.
-    await this.field('server_name').fill(opts.serverName);
-    await this.dialog.getByRole('button', { name: 'Next Step' }).click();
+    // Step 1 "Choose name and Game": name the server (the game is optional).
+    await this.typeInto(this.field('server_name'), opts.serverName, 'server name');
+    await this.advance('Next Step', 'step 1 (name/game)');
 
     // Step 2 "Choose Template": a generic game has no templates → continue without one.
-    await this.dialog.getByRole('button', { name: 'Continue without Template' }).click();
+    await this.advance('Continue without Template', 'step 2 (template)');
 
     // Step 3 "Configure your Server": custom Docker image + RAM limit (+ volume).
-    await this.field('docker_image_name').fill(opts.dockerImage);
-    if (opts.imageTag) {
-      await this.field('docker_image_tag').fill(opts.imageTag);
+    await this.typeInto(this.field('docker_image_name'), opts.dockerImage, 'docker image');
+    // The tag field defaults to "latest"; only override when a different tag is asked for.
+    if (opts.imageTag && opts.imageTag !== 'latest') {
+      await this.typeInto(this.field('docker_image_tag'), opts.imageTag, 'image tag');
     }
-    await this.field('docker_max_memory').fill(opts.memoryLimit);
+    await this.typeInto(this.field('docker_max_memory'), opts.memoryLimit, 'memory limit');
     if (opts.volumeMount) {
-      // The volume-mount ListInput always renders one empty row; fill it directly
-      // (no "Add" needed). Placeholder "/data" is unique on this step.
+      // The volume-mount ListInput always renders one empty row; type into it
+      // directly (no "Add" needed). Placeholder "/data" is unique on this step.
       // TODO(testid): add data-testid="create-volume-mount-input" to VolumeMountInput
-      await this.dialog.getByPlaceholder('/data').fill(opts.volumeMount);
+      await this.typeInto(this.dialog.getByPlaceholder('/data'), opts.volumeMount, 'volume mount');
     }
-    await this.dialog.getByRole('button', { name: 'Create Server', exact: true }).click();
+    await this.advance('Create Server', 'step 3 (configure)', true);
 
     // Confirm dialog: title "Create Server?", confirm button "Create Server".
     const confirm = this.page.getByRole('alertdialog');
