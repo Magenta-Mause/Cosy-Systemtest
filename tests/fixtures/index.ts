@@ -30,6 +30,22 @@ export function runsOnlyWithInstall(): void {
   test.skip(!process.env.INSTALL_LOG, NO_INSTALL_REASON);
 }
 
+/** Uniform skip reason for the quarantined heavy spec. */
+const NO_HEAVY_REASON =
+  'SYSTEMTEST_HEAVY not set — heavy Minecraft spec, quarantined on CI runners. ' +
+  'See docs/KNOWN-ISSUES.md ("rcon is quarantined").';
+
+/**
+ * Guard for specs that need a full Minecraft server to boot. On a GitHub-hosted
+ * 4-vCPU runner that has never succeeded (see docs/KNOWN-ISSUES.md), and each
+ * attempt burns ~20 minutes, so the nightly skips them and reports them as SKIPPED
+ * — honest and visible in the matrix — rather than as a 20-minute red. Set
+ * `SYSTEMTEST_HEAVY=1` to run them locally or on a beefier runner.
+ */
+export function runsOnlyWithHeavyEnabled(): void {
+  test.skip(!process.env.SYSTEMTEST_HEAVY, NO_HEAVY_REASON);
+}
+
 /**
  * Admin credentials are resolved once per worker (parse installer stdout +
  * cross-check `.env`) and cached, so the expensive parse/mismatch check runs a

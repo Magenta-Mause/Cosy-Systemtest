@@ -216,3 +216,33 @@ burning the whole test timeout — at which point the honest call is to skip rco
 GitHub-hosted runners with a documented note ("Minecraft does not reliably boot within
 budget on the 4-vCPU runner; RCON is exercised locally / needs a lighter RCON-capable
 image").
+
+## rcon is QUARANTINED on CI (Minecraft never boots on a GitHub-hosted runner)
+
+`rcon` is gated behind **`SYSTEMTEST_HEAVY`** (`runsOnlyWithHeavyEnabled()`), so the
+nightly reports it as **SKIPPED** rather than as a ~20-minute red. It remains fully
+runnable — set `SYSTEMTEST_HEAVY=1` locally or on a larger runner.
+
+**Why.** Across runs 12-15 the `minecraftServer` fixture never got Minecraft
+(itzg, `TYPE=PAPER`) to a stable **RUNNING** on a GitHub-hosted 4-vCPU / 16 GB runner
+within the 7-minute ready budget. What was tried, in order:
+
+1. **Ready-pattern audit** — `/Done \(|RCON running/i` *does* match PaperMC's
+   `Done (X.Xs)! For help, type "help"`, so ready-detection was never the bug; the
+   server genuinely never reached stable RUNNING.
+2. **OOM fix** — the JVM heap equalled the container limit (`MEMORY=2G` inside a
+   2 GiB container), leaving no room for JVM overhead; heap dropped to `1G`.
+3. **Timeout mechanics** — worker-fixture setup is bounded by the GLOBAL timeout, not
+   `describe.configure`; global raised to 600 s (run 14 died at the 30 s default).
+4. **Serial execution** — `workers: 1` on CI, so no competing image pull at all.
+
+None of it produced a boot. Each attempt costs ~20 min (1254 s in run 15).
+
+**Consequence: RCON is UNVERIFIED in CI.** The feature is exercised only when the flag
+is set.
+
+**Follow-ups.** (a) Read the new `results/diagnostics/` artifact from the next run for
+OOM-killer / disk-pressure evidence (`dmesg-oom.txt`, `df.txt`, `docker-stats.txt`) to
+confirm whether this is resource exhaustion rather than a product bug. (b) If it is
+environmental, move RCON coverage to a **lighter RCON-capable image** so the round-trip
+is testable on a standard runner, rather than keeping a Minecraft-sized dependency.
