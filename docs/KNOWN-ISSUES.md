@@ -126,6 +126,54 @@ create path (`DefaultSettingsMapper`) already initialises `public_dashboard.layo
 to an empty list, so an **empty** `layouts` array is handled fine; only a
 client-supplied layout id triggers the crash.
 
+### `start()` is rejected unless the server `isStopped()` — and image pulls contend (run 11)
+
+`GameServerService.startServer` throws **409 "Server is not in a stopped state"**
+unless the status `isStopped()` (`STOPPED || FAILED`). A start goes
+`STOPPED → AWAITING_UPDATE → (PULLING_IMAGE) → RUNNING`, all async. Because the
+shared tosios server is looked up **by name**, it is effectively shared across
+parallel workers, so one worker can call `start()` while another worker's start
+still has it in `AWAITING_UPDATE` → 409; and the RUNNING-wait can outlast a cold
+pull. This surfaced in run 11: once both PaperMC servers actually booted (they were
+broken in run 10, creating no real load), **two large image pulls ran concurrently**
+with the tosios specs on a 4-vCPU runner, stalling tosios starts in `AWAITING_UPDATE`
+past the old 120 s budget → `server-create` / `server-lifecycle` / `rcon` / `webhooks`
+/ `logs-history` all regressed (409s and RUNNING-timeouts).
+
+Fixed centrally, not per-spec:
+- `ApiClient.waitUntilStartable` waits for the server to reach a startable state
+  (STOPPED/FAILED, or RUNNING if someone else already brought it up), tolerating the
+  transient AWAITING_UPDATE/PULLING_IMAGE/STOPPING states.
+- `ApiClient.ensureRunning` waits-until-startable, starts (swallowing a 409 from a
+  worker that raced us on the shared-by-name server), then waits for RUNNING on the
+  generous `SERVER_COLD_START_TIMEOUT_MS` (300 s) budget. All the specs/fixtures that
+  needed a running server now call it; `server-create`'s UI "reaches RUNNING" wait
+  reuses the same budget and tolerates AWAITING_UPDATE.
+- CI parallelism is capped at **2 workers** (`playwright.config.ts`) so pulls/boots
+  don't stack. The two Minecraft specs are NOT otherwise serialised: they pull the
+  same `itzg/minecraft-server` image, so the second reuses cached layers — the real
+  lever is overall pull concurrency.
+
+### Create wizard step 2 needs REQUIRED template variables filled to advance
+
+Selecting a template makes the step-2 advance button read **"Apply Template"** and
+gates it on `validateTemplateVariables(selectedTemplate, templateVariables)` — every
+template variable must be non-empty + type/regex-valid. The hosted **PaperMC**
+template's `version` variable has **no default**, so it starts empty and the button
+stays disabled until it is filled. The variable inputs (`#version`, `#memory`, …)
+mount a render tick AFTER the template card is clicked, so the page object's
+`typeIfPresent` now **waits** for the input before deciding the template lacks it —
+an instantaneous `isVisible()` check raced the render and skipped the required
+`version`, leaving step 2 un-advanceable.
+
+### `/users` renders the user table twice (mobile + desktop) — scope to the visible card
+
+The `/users` route renders `UserTable` in both a mobile (`lg:hidden`) and a desktop
+(`hidden lg:block`) layout, so every user's `[data-slot="card"]` exists **twice** in
+the DOM. A bare `hasText` filter matches 2 elements and trips Playwright strict mode;
+`UsersPage.userCard` now adds `.filter({ visible: true })` to restrict to the active
+layout's card.
+
 ### Minecraft template/fixture uses PaperMC, not Vanilla (CI world-gen budget)
 
 The heavyweight Minecraft paths (`server-from-template` UI spec + the API
