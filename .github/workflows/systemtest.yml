@@ -121,8 +121,25 @@ jobs:
             status="failed"
           fi
 
+          # Named volumes defined by the compose stack (postgres-data, loki-data,
+          # influx_data/config, caddy_data/config). Relies on the fresh-VM
+          # assumption: nothing else on this runner creates these names, so any
+          # survivor means the uninstaller left volumes behind.
+          leftover_volumes=$(docker volume ls --format '{{.Name}}' \
+            | grep -E 'postgres-data|loki-data|influx_|caddy_' || true)
+          if [ -n "$leftover_volumes" ]; then
+            echo "FAIL: leftover compose volumes:"; echo "$leftover_volumes"
+            status="failed"
+          fi
+
           if [ -d "${INSTALL_DIR}" ]; then
             echo "FAIL: install dir ${INSTALL_DIR} still exists."
+            status="failed"
+          fi
+
+          # The uninstaller is supposed to remove the systemd service unit too.
+          if [ -f /etc/systemd/system/cosy.service ]; then
+            echo "FAIL: systemd unit /etc/systemd/system/cosy.service still exists."
             status="failed"
           fi
 
@@ -148,9 +165,12 @@ jobs:
             results/
           retention-days: 14
 
-      # Traces/videos only on failure — they are large and only needed to debug reds.
+      # Always upload traces/videos: the runner exits 0 on red features by design
+      # ("metrics are truth"), so the job stays green and `failure()` would never
+      # fire exactly when specs go red — the case we most need traces for. With
+      # trace:'on' a trace exists for every run regardless, so this is safe.
       - name: Upload traces and videos
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: systemtest-traces
