@@ -166,20 +166,30 @@ export class UsersPage {
 export class InviteRedemptionPage {
   constructor(private readonly page: Page) {}
 
+  /**
+   * The invite-redemption dialog specifically (title "Accept Invitation"). Scoped
+   * by title because on success the app opens a SECOND dialog — the global success
+   * notification (`notificationModal.success` renders a Radix Dialog) — so an
+   * unscoped `getByRole('dialog')` would match two elements and a `toBeHidden`
+   * check on it would fail strict-mode ("2 dialogs visible").
+   */
+  private get dialog(): Locator {
+    return this.page.getByRole('dialog').filter({ hasText: 'Accept Invitation' });
+  }
+
   /** Open the redemption modal by visiting the invite link. */
   async open(token: string): Promise<void> {
     await this.page.goto(`/?inviteToken=${encodeURIComponent(token)}`);
-    await expect(this.page.getByRole('dialog').getByText('Accept Invitation')).toBeVisible({
-      timeout: UI_FLOW_TIMEOUT_MS,
-    });
+    await expect(this.dialog).toBeVisible({ timeout: UI_FLOW_TIMEOUT_MS });
   }
 
   /**
-   * Redeem the invite by choosing a username + password. On success the modal
-   * shows a success notification and closes (the user is NOT auto-logged-in).
+   * Redeem the invite by choosing a username + password. On success the invite
+   * modal closes and a success notification appears (the user is NOT
+   * auto-logged-in); the caller then logs in normally.
    */
   async redeem(username: string, password: string): Promise<void> {
-    const dialog = this.page.getByRole('dialog');
+    const dialog = this.dialog;
     const usernameInput = dialog.locator('#username');
     // Username is prefilled + disabled when the inviter set one; only fill if editable.
     if (await usernameInput.isEnabled()) {
