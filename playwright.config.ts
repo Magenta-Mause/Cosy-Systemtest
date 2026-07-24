@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-import { resolveBaseURL } from './tests/helpers/constants';
+import { resolveBaseURL, UI_ACTION_TIMEOUT_MS } from './tests/helpers/constants';
 
 const isCI = !!process.env.CI;
 
@@ -43,6 +43,14 @@ export default defineConfig({
 
   use: {
     baseURL: resolveBaseURL(),
+    // Bound every ACTION (click/fill/press). Playwright's default is 0 = "wait as
+    // long as the test allows", which turns a locator that matches nothing into a
+    // silent hang consuming the entire test budget and reported only as a generic
+    // "Test timeout exceeded" — run 16 burned 117s that way on a single click whose
+    // selector was wrong. A bounded action fails at the real call site with
+    // Playwright's own "waiting for locator(…)" diagnostic, which names the culprit.
+    // Assertions keep their own explicit, longer timeouts.
+    actionTimeout: UI_ACTION_TIMEOUT_MS,
     // Trace always: a nightly failure must be fully debuggable from the artifact
     // alone (no local repro on a throwaway runner).
     trace: 'on',

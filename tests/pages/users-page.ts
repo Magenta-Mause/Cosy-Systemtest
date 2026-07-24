@@ -107,10 +107,18 @@ export class UsersPage {
     });
   }
 
-  /** Open the icon-only "More Options" menu for a user (structural locator). */
+  /**
+   * Open the icon-only "More Options" menu for a user (structural locator).
+   *
+   * The trigger is `<DropdownMenuTrigger asChild><Button …>` — and Radix's `asChild`
+   * merges the TRIGGER's props onto the child, so the rendered element carries
+   * `data-slot="dropdown-menu-trigger"`, NOT the Button's `data-slot="button"`.
+   * Querying `[data-slot="button"]` therefore matched nothing and `click()` waited
+   * forever (run 16: 117s, the whole test timeout). Match the trigger slot instead.
+   */
   private async openRowMenu(username: string): Promise<void> {
     // TODO(testid): add data-testid="user-row-menu-btn" to UserRow dots Button
-    await this.userCard(username).locator('[data-slot="button"]').click();
+    await this.userCard(username).locator('[data-slot="dropdown-menu-trigger"]').click();
   }
 
   /** Change a user's role via the row menu → "Change Role" dialog. */
