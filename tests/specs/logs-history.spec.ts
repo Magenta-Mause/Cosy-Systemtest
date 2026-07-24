@@ -2,7 +2,7 @@ import { test, expect, runsOnlyWithInstall } from '@fixtures/index';
 import { ConsolePage, ServerDetailPage } from '@pages/index';
 import {
   LOGS_HISTORY_TIMEOUT_MS,
-  SERVER_START_TIMEOUT_MS,
+  SERVER_COLD_START_TIMEOUT_MS,
   SERVER_STOP_TIMEOUT_MS,
   TEST_SERVER_MEMORY_LIMIT,
   TOSIOS_IMAGE,
@@ -18,12 +18,18 @@ import {
  *
  * Loki ingestion lags the live stream, so readiness is polled with a generous
  * budget. A dedicated throwaway server is used (not the shared one) so stopping it
- * cannot race the specs that need the shared server running.
+ * cannot race the specs that need the shared server running — which is also why it
+ * cannot simply reuse the already-running shared server. Because it is created
+ * fresh, its first start may cold-pull the tosios image while the rest of the
+ * extended suite is pulling in parallel, so the start is given the wide
+ * SERVER_COLD_START_TIMEOUT_MS budget (the server otherwise sits in
+ * AWAITING_UPDATE — the first async-start state — past the standard budget).
  */
 test.describe('@extended logs-history', () => {
   runsOnlyWithInstall();
 
-  test.describe.configure({ timeout: 240_000 });
+  // Wide ceiling: cold image pull + Loki ingestion + stop + console history assert.
+  test.describe.configure({ timeout: 600_000 });
 
   test('historical logs are returned after the server produced output', async ({
     loggedInPage: page,
@@ -42,7 +48,7 @@ test.describe('@extended logs-history', () => {
     try {
       await test.step('Given: the server ran and produced output ingested by Loki', async () => {
         await apiClient.startServer(server.uuid);
-        await apiClient.waitForStatus(server.uuid, 'RUNNING', SERVER_START_TIMEOUT_MS);
+        await apiClient.waitForStatus(server.uuid, 'RUNNING', SERVER_COLD_START_TIMEOUT_MS);
         // Wait until at least one line is queryable from history (Loki ingestion).
         await apiClient.waitForLogMatch(server.uuid, /\S/, LOGS_HISTORY_TIMEOUT_MS);
       });
