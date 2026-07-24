@@ -184,3 +184,35 @@ never reached RUNNING). Paper is a drop-in, vanilla-compatible server that gener
 world far faster and supports the same RCON `list` command, so it boots reliably within
 budget. `server-from-template` also runs with `retries: 0` — its failure modes are not
 transient, so retrying only multiplies its ~10-minute cost.
+
+## Phase-2 findings from run 12/13
+
+### Wizard catalog templates are gated by the SteamGridDB games API (product limitation)
+
+The create wizard's step-1 game autocomplete searches the **games API**
+(`cosy-game-api.jannekeipert.de`, a SteamGridDB proxy), which is DISJOINT from the
+**template service** catalog. A catalog template whose `game_id` has no games-API
+(SteamGridDB) presence is therefore **unreachable in the wizard** — you cannot select
+its game, so you never reach its templates. This is why `server-from-template` cannot
+use the TOSIOS catalog template (tosios has no SteamGridDB entry) and stays on a real
+games-API-backed game (Minecraft). Worth surfacing in-product: templates for games
+that lack an `external_game_id` should still be selectable (e.g. a "Custom / other"
+game path in step 1).
+
+### rcon Minecraft fixture: JVM heap == container limit → OOM (not a ready-pattern bug)
+
+Investigating rcon's repeated fixture timeout (server never RUNNING+ready): the ready
+regex `/Done \(|RCON running/i` **correctly matches** PaperMC's `Done (X.Xs)! For
+help, type "help"`, so ready-detection was never the problem — the server was not
+reaching a stable **RUNNING**. Root cause: the itzg `MEMORY` env was `2G` (JVM
+-Xmx2G) while the Docker container limit was `2GiB` — heap equal to the whole
+container leaves no room for JVM overhead (metaspace, stacks, direct buffers, GC), so
+the container OOM-kills before/around world-gen, flapping and never stabilising.
+Fixed by dropping the JVM heap to `1G` (MINECRAFT_JVM_MEMORY) under the 2 GiB limit.
+The fixture's ready wait is also **bounded to 7 min** (MINECRAFT_READY_TIMEOUT_MS) so,
+if the boot is still stuck next run (e.g. an image-pull stall keeping it in
+AWAITING_UPDATE), `ensureRunning` fails cleanly with the last status instead of
+burning the whole test timeout — at which point the honest call is to skip rcon on
+GitHub-hosted runners with a documented note ("Minecraft does not reliably boot within
+budget on the 4-vCPU runner; RCON is exercised locally / needs a lighter RCON-capable
+image").

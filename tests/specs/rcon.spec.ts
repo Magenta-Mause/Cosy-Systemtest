@@ -21,12 +21,14 @@ test.describe('@extended rcon', () => {
   runsOnlyWithInstall();
 
   // The `minecraftServer` fixture boots a cold PaperMC server (image pull + world
-  // gen), and that setup counts against this test's timeout, so the budget must fit
-  // a full cold Minecraft boot. No cross-spec serialization is needed: rcon is now
-  // the SUITE'S ONLY Minecraft boot — server-from-template switched to the tiny
-  // TOSIOS catalog template — so there is no second concurrent PaperMC pull to
-  // starve it on the 4-vCPU runner (the run-11/12 contention root cause).
-  test.describe.configure({ timeout: 720_000 });
+  // gen) and its setup counts against this test's timeout, so the budget fits a full
+  // cold boot plus the RCON round-trip. rcon is the SUITE'S ONLY real Minecraft boot
+  // (server-from-template no longer starts one), so there is no concurrent PaperMC
+  // pull to starve it. The fixture's own ready wait is bounded (MINECRAFT_READY_TIMEOUT_MS
+  // = 7 min) so a stuck boot fails cleanly with the last status rather than burning
+  // this whole budget; the JVM heap was dropped below the container limit to remove
+  // the OOM-crash-loop that kept it from reaching RUNNING. See docs/KNOWN-ISSUES.md.
+  test.describe.configure({ timeout: 600_000 });
 
   test('enable RCON and send a command, then see the response', async ({
     loggedInPage: page,

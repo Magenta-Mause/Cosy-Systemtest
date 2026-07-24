@@ -102,11 +102,14 @@ export const LOGS_HISTORY_TIMEOUT_MS = 90_000;
 export const METRICS_RENDER_TIMEOUT_MS = 120_000;
 
 /**
- * Minecraft (itzg/minecraft-server) from a template: image pull + EULA + world
- * generation until the server reports "Done"/RUNNING. Much heavier than tosios —
- * the plan budgets 5-8 minutes, so we allow a wide ceiling.
+ * Minecraft (itzg/PaperMC) readiness in the `rcon` fixture: image pull + boot + world
+ * gen until the server is RUNNING and logs "Done". BOUNDED at 7 min (not the old
+ * 12 min): a healthy 1 GiB Paper boot on the runner completes well within this, and
+ * if the server is genuinely stuck (image-pull stall → AWAITING_UPDATE, or an OOM
+ * crash loop), ensureRunning throws cleanly with the last status at ~7 min instead of
+ * burning the full test timeout with no diagnosis. See docs/KNOWN-ISSUES.md.
  */
-export const MINECRAFT_READY_TIMEOUT_MS = 600_000;
+export const MINECRAFT_READY_TIMEOUT_MS = 420_000;
 
 /** How long to wait for an RCON command's response line to appear in the console. */
 export const RCON_RESPONSE_TIMEOUT_MS = 45_000;
@@ -127,11 +130,20 @@ export const MINECRAFT_GAME_ID = 'minecraft';
 export const MINECRAFT_IMAGE = 'itzg/minecraft-server';
 
 /**
- * Lowest sensible memory for the Minecraft run. The vanilla template's memory
- * variable defaults to "2" (2 GiB); we keep the run at 1-2 G per the plan to fit
- * the runner while leaving headroom for world gen.
+ * Container memory LIMIT (Docker `--memory`) for the Minecraft run — must exceed the
+ * JVM heap (MINECRAFT_JVM_MEMORY) or the container OOM-kills before the world is ready.
  */
 export const MINECRAFT_MEMORY_GIB = '2';
+
+/**
+ * JVM heap for the itzg server (`MEMORY` env → -Xms/-Xmx). Kept at 1 GiB — WELL BELOW
+ * the 2 GiB container limit above. The heap plus JVM overhead (metaspace, thread
+ * stacks, direct buffers, GC) must fit inside the container limit; setting the heap
+ * equal to the limit (the previous "2G" with a 2GiB container) risks an OOM-kill loop
+ * that leaves the server never reaching a stable RUNNING — the likely cause of the
+ * rcon fixture never becoming ready. 1 GiB boots a fresh Paper world fine.
+ */
+export const MINECRAFT_JVM_MEMORY = '1G';
 
 /** Games known to exist in the hosted catalog (Cosy-templates/templates/*). */
 export const KNOWN_TEMPLATE_GAMES = ['minecraft', 'terraria', 'cs2', 'palworld', 'ark'] as const;
@@ -165,7 +177,8 @@ export const MINECRAFT_RCON_PASSWORD = 'systemtest-rcon';
 export const MINECRAFT_ENV: Record<string, string> = {
   EULA: 'true',
   TYPE: 'PAPER',
-  MEMORY: `${MINECRAFT_MEMORY_GIB}G`,
+  // JVM heap (1G) deliberately BELOW the 2GiB container limit — see MINECRAFT_JVM_MEMORY.
+  MEMORY: MINECRAFT_JVM_MEMORY,
   ENABLE_RCON: 'true',
   RCON_PORT: String(MINECRAFT_RCON_PORT),
   RCON_PASSWORD: MINECRAFT_RCON_PASSWORD,
