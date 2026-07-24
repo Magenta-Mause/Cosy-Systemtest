@@ -293,9 +293,55 @@ export class CreateServerPage {
     return this.page.getByRole('option', { name });
   }
 
-  /** The step-2 template list is a role=listbox of role=option cards. */
+  /**
+   * The step-2 template list. Verified against released `TemplateList.tsx` (5dba6e8):
+   * a `<div role="listbox">` of `<Card role="option">` entries — so the role-based
+   * locator IS the real structure. Note Step2 renders a DIFFERENT branch entirely
+   * (a "No templates are available for this game." paragraph, no listbox at all)
+   * whenever `templatesForGame` is empty — which is also the state while the
+   * templates redux slice is still being fetched. Hence {@link waitForTemplateOptions}.
+   */
   private get templateList(): Locator {
     return this.dialog.getByRole('listbox');
+  }
+
+  /** Step-2's empty/short-circuit branch (rendered instead of the listbox). */
+  private get noTemplatesMessage(): Locator {
+    return this.dialog.getByText(/No templates are available for this game/i);
+  }
+
+  /**
+   * Wait for step 2 to actually offer templates, tolerating the slice still loading.
+   * `templatesForGame` filters the templates redux slice by the selected game, and
+   * until that fetch resolves the list is empty → Step2 renders the
+   * "No templates are available" branch (no listbox), then re-renders once the
+   * templates arrive. So a short wait can observe the empty branch and give up. Poll
+   * generously, and if we still end on the empty branch say so precisely — that
+   * distinguishes "hosted template API returned nothing for this game" from "the
+   * option locator is wrong".
+   */
+  private async waitForTemplateOptions(): Promise<void> {
+    const option = this.templateList.getByRole('option').first();
+    try {
+      await expect(option).toBeVisible({ timeout: UI_FLOW_TIMEOUT_MS });
+    } catch (e) {
+      if (await this.noTemplatesMessage.isVisible().catch(() => false)) {
+        throw new Error(
+          'step 2: the wizard reports "No templates are available for this game" — the ' +
+            'templates slice loaded but contained no template matching the selected ' +
+            "game's id (hosted template API empty/unreachable, or a game↔template id " +
+            'mismatch). This is NOT a selector problem: TemplateList renders ' +
+            'role=listbox/role=option when it has templates.',
+          { cause: e },
+        );
+      }
+      await this.throwIfCrashed('waiting for the step-2 template list');
+      throw new Error(
+        'step 2: no template options appeared and the "no templates" message was not ' +
+          'shown either — the template list never rendered.',
+        { cause: e },
+      );
+    }
   }
 
   /**
@@ -366,9 +412,7 @@ export class CreateServerPage {
       await this.typeInto(nameField, `catalog-check-${Date.now()}`, 'server name');
     }
     await this.advance('Next Step', 'step 1 (name/game)');
-    await expect(this.templateList.getByRole('option').first()).toBeVisible({
-      timeout: UI_ACTION_TIMEOUT_MS,
-    });
+    await this.waitForTemplateOptions();
   }
 
   /**
@@ -428,10 +472,7 @@ export class CreateServerPage {
     // Step 2 — pick the catalog template, then fill its required variables. Once a
     // template is selected the advance reads "Apply Template" (vs "Continue without
     // Template") and only enables when validateTemplateVariables passes.
-    await expect(
-      this.templateList.getByRole('option').first(),
-      'step 2: no templates loaded for the selected game (hosted template API?)',
-    ).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    await this.waitForTemplateOptions();
     await this.templateList.getByRole('option', { name: opts.template }).first().click();
     for (const [id, value] of Object.entries(opts.templateVariables ?? {})) {
       await this.typeTemplateVariable(id, value);
