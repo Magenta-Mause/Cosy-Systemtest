@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { expect } from '@playwright/test';
-import { WS_MESSAGE_TIMEOUT_MS } from '@helpers/constants';
+import { UI_ACTION_TIMEOUT_MS, WS_MESSAGE_TIMEOUT_MS } from '@helpers/constants';
 
 /**
  * The public dashboard, rendered from the normal server route with `?view=public`.
@@ -34,10 +34,22 @@ export class PublicDashboardView {
     });
   }
 
-  /** Confirm the viewer is genuinely unauthenticated (login affordance present). */
+  /**
+   * Confirm the viewer is genuinely unauthenticated. There is NO "Sign In"
+   * affordance on this route: the login dialog (LoginDisplay) is rendered only on
+   * the home route, never on `/server/{uuid}`, so waiting for a "Sign In" button
+   * here always timed out. The server-detail chrome DOES render for the public
+   * view, but the start/stop control (GameServerStartStopButton) is hidden unless
+   * the viewer holds the SEE_SERVER permission — which an unauthenticated viewer
+   * does not — so it is absent. An authenticated owner opening the same page WOULD
+   * see it. Assert neither the "Start" nor the "Shutdown" control is present.
+   */
   async expectUnauthenticated(): Promise<void> {
-    await expect(this.page.getByRole('button', { name: 'Sign In' }).first()).toBeVisible({
-      timeout: WS_MESSAGE_TIMEOUT_MS,
+    await expect(this.page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(0, {
+      timeout: UI_ACTION_TIMEOUT_MS,
+    });
+    await expect(this.page.getByRole('button', { name: 'Shutdown', exact: true })).toHaveCount(0, {
+      timeout: UI_ACTION_TIMEOUT_MS,
     });
   }
 }
