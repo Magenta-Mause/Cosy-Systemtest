@@ -18,7 +18,13 @@ test.describe('@extended server-from-template', () => {
   runsOnlyWithInstall();
 
   // Image pull + world gen dominate; allow well beyond the ready budget.
-  test.describe.configure({ timeout: MINECRAFT_READY_TIMEOUT_MS + 120_000 });
+  //
+  // retries: 0 — this is the single most expensive spec (a full Minecraft image
+  // pull + world generation, ~10 min per attempt). Its failure modes (world-gen
+  // overrunning the budget, hosted template API down) are NOT transient, so the
+  // default CI retries would triple its ~10 min cost to ~30 min without changing
+  // the outcome. Fail fast on the first attempt instead.
+  test.describe.configure({ timeout: MINECRAFT_READY_TIMEOUT_MS + 120_000, retries: 0 });
 
   test('create a Minecraft server from a template and reach ready', async ({
     loggedInPage: page,

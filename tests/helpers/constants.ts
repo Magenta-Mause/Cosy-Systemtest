@@ -144,10 +144,16 @@ export const MINECRAFT_RCON_PASSWORD = 'systemtest-rcon';
  * Base env for the itzg Minecraft server created over the API (the fixture path).
  * `EULA=true` is mandatory or itzg refuses to start; RCON_* make RCON testable.
  * (The template path sets EULA via the template's own env.)
+ *
+ * TYPE is PAPER, not VANILLA: on a 4-vCPU GitHub runner, vanilla world generation
+ * routinely overran the ready budget (the first full run took ~30 min with retries
+ * and still failed to reach RUNNING). PaperMC is a drop-in vanilla-compatible server
+ * that generates a world far faster while supporting the same RCON `list` command,
+ * so it boots reliably within budget. See docs/KNOWN-ISSUES.md.
  */
 export const MINECRAFT_ENV: Record<string, string> = {
   EULA: 'true',
-  TYPE: 'VANILLA',
+  TYPE: 'PAPER',
   MEMORY: `${MINECRAFT_MEMORY_GIB}G`,
   ENABLE_RCON: 'true',
   RCON_PORT: String(MINECRAFT_RCON_PORT),
