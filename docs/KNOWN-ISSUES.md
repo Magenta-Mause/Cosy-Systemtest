@@ -82,3 +82,57 @@ effects `setAttribute*` unconditionally keyed on `creationState.gameServerState`
 this converges (the module-level `PAGES` element keeps Step 1 from re-rendering on
 `isPageValid` churn). Worth hardening upstream: stabilise the validator (module
 constant) and bail out of `setPageValid` / `setAttribute*` when the value is unchanged.
+
+## Phase-2 findings from the first full 19-feature run (2026-07-24)
+
+### `/user-entity/{uuid}/change-password` is the SELF endpoint (403 for admins)
+
+`PATCH /user-entity/{uuid}/change-password` (`PasswordUpdateDto { old_password,
+new_password }`) is the **self-service** password change — the admin bearer is not
+authorised to change *another* user's password there and gets **403 FORBIDDEN**. The
+admin-side endpoint is `PATCH /user-entity/{uuid}/change-password-by-admin`
+(`PasswordUpdateByAdminDto { new_password }`, no old password).
+
+The suite's `provisionUser` originally redeemed an invite with a temp password then
+called the *self* endpoint to set the final one — hence the 403. Redeeming an invite
+already sets the account password directly (`UserInviteService.useInvite` encodes the
+supplied password), and the advertised "forced first-login change" never fires
+(`defaultPasswordReset(true)` is a **dormant no-op** — the getter has zero usages and
+no frontend surfaces it). So `provisionUser` now simply **redeems with the final
+password** and the user logs in with it — no change-password call at all.
+
+### Game search list surfaces no artwork (released 5dba6e8)
+
+The `games-search` spec originally asserted an `<img>` artwork element on each game
+option. The released create wizard renders game options via
+`Step1.mapGamesDtoToAutoCompleteItems` → `AutoCompleteItemList`, which only sets
+`label` (game name) + `additionalInformation` (template count) and **no `leftSlot`**,
+so the option row contains no artwork element. The spec therefore asserts a matching
+game *result* appears (proving the hosted game-service path resolves), not artwork.
+Surfacing SteamGridDB artwork in the game picker would be a frontend enhancement.
+
+### Public-dashboard layout: never send a client `uuid` (backend robustness finding)
+
+`PATCH /game-server/{uuid}/layout/public-dashboard`
+(`PublicDashboardUpdateDto { enabled, layouts }`) persists each `PublicDashboardLayout`,
+whose id is a JPA `@GeneratedValue @Id`. The released frontend
+(`PublicDashboardSettingsSection`) creates new widgets **without** a `uuid` and lets
+the backend generate it. Sending a client-generated `uuid` (as the spec first did via
+`crypto.randomUUID()`) makes Hibernate treat the layout as a *detached* entity on the
+cascade save → the PATCH fails with **500 "An unexpected error occurred"**. Fix was on
+the test side (omit `uuid`, matching the released payload). Backend robustness gap:
+this should be rejected as a 400 (or the id ignored) rather than surfacing a 500 — the
+create path (`DefaultSettingsMapper`) already initialises `public_dashboard.layouts`
+to an empty list, so an **empty** `layouts` array is handled fine; only a
+client-supplied layout id triggers the crash.
+
+### Minecraft template/fixture uses PaperMC, not Vanilla (CI world-gen budget)
+
+The heavyweight Minecraft paths (`server-from-template` UI spec + the API
+`minecraftServer` fixture used by `rcon`) run **PaperMC** (`TYPE=PAPER`), not Vanilla.
+On a 4-vCPU GitHub runner, vanilla world generation routinely overran the 10-minute
+ready budget (the first full run spent ~30 min on this spec across retries and still
+never reached RUNNING). Paper is a drop-in, vanilla-compatible server that generates a
+world far faster and supports the same RCON `list` command, so it boots reliably within
+budget. `server-from-template` also runs with `retries: 0` — its failure modes are not
+transient, so retrying only multiplies its ~10-minute cost.
