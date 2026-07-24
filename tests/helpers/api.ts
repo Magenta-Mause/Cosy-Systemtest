@@ -4,9 +4,16 @@
  * game servers plus polls their status, so a spec can get-or-create the shared
  * test server without clicking through the whole creation wizard every time.
  *
+ * WIRE FORMAT IS snake_case — both directions. The backend's Jackson ObjectMapper
+ * uses SNAKE_CASE globally (application.yaml `spring.jackson.property-naming-strategy:
+ * SNAKE_CASE` + UtilConfig), so every multi-word field is snake_case on the wire:
+ * responses come back as `refresh_token` / `server_name` / `docker_image_name`, and
+ * request bodies MUST be sent the same way. Do NOT "fix" these to camelCase.
+ * (Single-word fields — username, password, uuid, status — are unaffected.)
+ *
  * Auth model (see backend AuthorizationController):
- *   POST /api/auth/login?tokenMode=DIRECT  → { refreshToken }
- *   GET  /api/auth/token   (Cookie: refreshToken=…)  → identity token (bearer)
+ *   POST /api/auth/login?tokenMode=DIRECT  → data: { refresh_token }
+ *   GET  /api/auth/token   (Cookie: refreshToken=…)  → data: identity token (bearer)
  * The identity token is a short-lived JWT sent as `Authorization: Bearer …`.
  */
 import { API_CONTEXT_PATH, resolveBaseURL } from './constants';
@@ -48,14 +55,15 @@ export class ApiClient {
 
   /** Log in and obtain a bearer identity token for subsequent calls. */
   async login(creds: AdminCredentials): Promise<void> {
-    const dto = await this.send<{ refreshToken?: string }>(
+    // Response field is snake_case: data.refresh_token (see wire-format note above).
+    const dto = await this.send<{ refresh_token?: string }>(
       'POST',
       '/auth/login?tokenMode=DIRECT',
       { username: creds.username, password: creds.password },
       'Login',
     );
-    if (!dto?.refreshToken) throw new Error('Login response did not contain a refreshToken.');
-    this.refreshToken = dto.refreshToken;
+    if (!dto?.refresh_token) throw new Error('Login response did not contain a refresh_token.');
+    this.refreshToken = dto.refresh_token;
     await this.refreshBearer();
   }
 
