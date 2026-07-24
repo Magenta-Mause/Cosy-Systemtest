@@ -72,3 +72,84 @@ export const TEST_SERVER_MEMORY_LIMIT = '512MiB';
 
 /** Name of the server reused across lifecycle/console/files (get-or-create). */
 export const SHARED_SERVER_NAME = 'systemtest-tosios';
+
+// ── Phase 2: extended feature budgets & data ────────────────────────────────
+
+/**
+ * Historical logs are Loki-backed, and Loki ingestion lags the live stream by a
+ * few seconds. `logs-history` polls the history view for up to this long before
+ * giving up (generous — a fresh runner's Loki can be slow to flush).
+ */
+export const LOGS_HISTORY_TIMEOUT_MS = 90_000;
+
+/**
+ * Metrics are InfluxDB-backed and only accrue once the container has been running
+ * long enough to emit a couple of scrape periods (custom-metrics period is 2 s).
+ * The `metrics` spec polls the dashboard for rendered data points for up to this
+ * long.
+ */
+export const METRICS_RENDER_TIMEOUT_MS = 120_000;
+
+/**
+ * Minecraft (itzg/minecraft-server) from a template: image pull + EULA + world
+ * generation until the server reports "Done"/RUNNING. Much heavier than tosios —
+ * the plan budgets 5-8 minutes, so we allow a wide ceiling.
+ */
+export const MINECRAFT_READY_TIMEOUT_MS = 600_000;
+
+/** How long to wait for an RCON command's response line to appear in the console. */
+export const RCON_RESPONSE_TIMEOUT_MS = 45_000;
+
+/** How long to wait for the local webhook sink to receive a delivered event. */
+export const WEBHOOK_DELIVERY_TIMEOUT_MS = 60_000;
+
+/** A short-lived UI flow that provisions data (invite redeem, role change, etc.). */
+export const UI_FLOW_TIMEOUT_MS = 60_000;
+
+/**
+ * Minecraft template identity. The single-host compose install points the backend
+ * at the HOSTED template/game APIs (see the templates/games-search spec comments),
+ * whose catalog exposes `minecraft` as a game id (Cosy-templates
+ * templates/minecraft/vanilla.yaml → game_id: minecraft, image itzg/minecraft-server).
+ */
+export const MINECRAFT_GAME_ID = 'minecraft';
+export const MINECRAFT_IMAGE = 'itzg/minecraft-server';
+
+/**
+ * Lowest sensible memory for the Minecraft run. The vanilla template's memory
+ * variable defaults to "2" (2 GiB); we keep the run at 1-2 G per the plan to fit
+ * the runner while leaving headroom for world gen.
+ */
+export const MINECRAFT_MEMORY_GIB = '2';
+
+/** Games known to exist in the hosted catalog (Cosy-templates/templates/*). */
+export const KNOWN_TEMPLATE_GAMES = ['minecraft', 'terraria', 'cs2', 'palworld', 'ark'] as const;
+
+/** Shared server name reused by the extended specs that need a running server. */
+export const SHARED_MINECRAFT_NAME = 'systemtest-minecraft';
+
+/**
+ * RCON wiring for the itzg Minecraft server. The vanilla Cosy template
+ * (Cosy-templates/templates/minecraft/vanilla.yaml) does NOT wire RCON env vars,
+ * so the itzg image defaults apply (RCON enabled, port 25575). To make RCON
+ * deterministically testable we create the shared Minecraft server with an
+ * explicit RCON password/port via `environment_variables`, then configure Cosy's
+ * RCON with the SAME values so Cosy can connect and relay `list` back to the
+ * console.
+ */
+export const MINECRAFT_RCON_PORT = 25575;
+export const MINECRAFT_RCON_PASSWORD = 'systemtest-rcon';
+
+/**
+ * Base env for the itzg Minecraft server created over the API (the fixture path).
+ * `EULA=true` is mandatory or itzg refuses to start; RCON_* make RCON testable.
+ * (The template path sets EULA via the template's own env.)
+ */
+export const MINECRAFT_ENV: Record<string, string> = {
+  EULA: 'true',
+  TYPE: 'VANILLA',
+  MEMORY: `${MINECRAFT_MEMORY_GIB}G`,
+  ENABLE_RCON: 'true',
+  RCON_PORT: String(MINECRAFT_RCON_PORT),
+  RCON_PASSWORD: MINECRAFT_RCON_PASSWORD,
+};

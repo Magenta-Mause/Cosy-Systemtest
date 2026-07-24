@@ -6,15 +6,18 @@ new version (nightly + on demand) they install Cosy from scratch via
 drive each feature through the real web UI, and publish a per-feature pass/fail
 matrix.
 
-**Phase 1** (this state): repo scaffold + workflow + the install → core lifecycle →
-uninstall specs, on the **release** channel, nightly + manual trigger. Results are a
-GitHub artifact (reporting dry-run); OTLP/SigNoz reporting and the staging channel
-come in later phases. See [`Cosy/PLAN-systemtest.md`](https://github.com/Magenta-Mause/Cosy)
+**Phase 2** (this state): the full feature matrix. Phase 1 delivered the install →
+core lifecycle → uninstall path (`@core`); Phase 2 adds the remaining feature specs
+(`@extended`). Still release channel, nightly + manual trigger, results as a GitHub
+artifact (reporting dry-run); OTLP/SigNoz reporting and the staging channel come in
+later phases. See [`Cosy/PLAN-systemtest.md`](https://github.com/Magenta-Mause/Cosy)
 for the full roadmap.
 
-## Features covered (Phase 1)
+## Features covered
 
-| Feature (`@core`) | Proves, as the user |
+### Core (`@core`) — install → lifecycle → uninstall
+
+| Feature | Proves, as the user |
 |---|---|
 | `install` | Fresh install → stack healthy (`/api/actuator/health`), UI reachable, printed admin credentials valid and matching `.env` |
 | `auth` | Login with the parsed credentials, token refresh survives reload, logout |
@@ -24,12 +27,41 @@ for the full roadmap.
 | `files` | File browser: create / rename / delete a directory (+ edit a text file if present) |
 | `uninstall` | Asserted by the workflow (no leftover containers/dirs), not a spec |
 
+### Extended (`@extended`) — full feature matrix
+
+| Feature | Proves, as the user |
+|---|---|
+| `invites` | Admin creates an invite → redeemed in a 2nd unauthenticated context → new user logs in and lands in the UI |
+| `user-management` | Set a quota user's docker-limits, change role, delete — via the users UI |
+| `logs-history` | Loki-backed history returns lines the (now stopped) container produced |
+| `metrics` | Metrics page renders the CPU/Memory series (InfluxDB) with data points |
+| `templates` | Create wizard's catalog (hosted template API) loads the known games + their templates |
+| `games-search` | Game search returns results with artwork (hosted game API → SteamGridDB) |
+| `server-from-template` | Create a Minecraft server (itzg) from the template flow → reaches ready |
+| `rcon` | Enable RCON via settings UI → send `list` in the console → RCON response appears |
+| `webhooks` | Create an n8n webhook in the UI → trigger the event → a local HTTP sink receives it |
+| `access-management` | Access group + limited member permissions → restricted user actually restricted in the UI |
+| `public-dashboard` | Configured public dashboard renders for a fresh **unauthenticated** viewer (`?view=public`) |
+| `settings-design` | General settings (server name) + server-card design persist across reload |
+
+`@extended` specs are tagged, not selected by a file list; `npm run test:extended`
+runs them, `npm run test:core` runs the core set, `npm test` runs everything. The
+runner records one result row per spec file regardless of tag.
+
+**Hosted-service dependency:** the single-host docker-compose install ships no
+`cosy.templates-api.url` / `cosy.games-api.url` override, so the backend uses its
+`application.yaml` defaults, which point at the **hosted** public services
+(`cosy-templates.jannekeipert.de`, `cosy-game-api.jannekeipert.de`). `templates` and
+`games-search` therefore exercise that real user path — a hosted-API outage reds
+exactly those two rows (intended), not the suite.
+
 ## Commands
 
 ```bash
 npm install                 # install deps (Node >= 22)
 npm test                    # run the whole suite (chromium)
-npm run test:core           # run @core-tagged specs (all of them, in Phase 1)
+npm run test:core           # run @core-tagged specs (install → lifecycle → uninstall)
+npm run test:extended       # run @extended-tagged specs (the rest of the matrix)
 npm run typecheck           # tsc --noEmit
 npm run systemtest          # run the suite via the runner → results/summary.json
 npm run report              # open the last HTML report

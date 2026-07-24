@@ -36,6 +36,15 @@ export class ConsolePage {
       .toBe(true);
   }
 
+  /**
+   * Assert a log line matching `pattern` appears in the console (e.g. an RCON
+   * command's response). Auto-scroll keeps the newest line rendered, so a recent
+   * response is in the virtualized DOM.
+   */
+  async expectLogContains(pattern: RegExp, timeout = WS_MESSAGE_TIMEOUT_MS): Promise<void> {
+    await expect(this.logList.getByText(pattern).first()).toBeVisible({ timeout });
+  }
+
   /** Send a console command (submitted on Enter). */
   async sendCommand(command: string): Promise<void> {
     await expect(this.commandInput).toBeEnabled({ timeout: UI_ACTION_TIMEOUT_MS });

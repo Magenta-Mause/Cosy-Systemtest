@@ -34,6 +34,8 @@ export interface GameServer {
   status?: GameServerStatus;
   docker_image_name?: string;
   docker_image_tag?: string;
+  /** Present on GET /game-server/{uuid}; used for access-group cleanup. */
+  access_groups?: AccessGroup[];
 }
 
 export interface CreateGameServerInput {
@@ -42,6 +44,123 @@ export interface CreateGameServerInput {
   docker_image_tag?: string;
   /** Unit-suffixed memory string, e.g. "512MiB". */
   memory_limit?: string;
+  /** Container env vars (e.g. EULA/RCON for the itzg Minecraft server). */
+  environment_variables?: Record<string, string>;
+}
+
+// ── Phase 2 wire types (snake_case, verified against backend DTOs) ────────────
+
+/** UserEntity.Role — the only three roles the backend defines (no USER/MODERATOR). */
+export type UserRole = 'OWNER' | 'ADMIN' | 'QUOTA_USER';
+
+export interface DockerHardwareLimits {
+  docker_max_cpu_cores?: number;
+  docker_memory_limit?: string;
+}
+
+export interface UserEntity {
+  uuid: string;
+  username: string;
+  role?: UserRole;
+  docker_hardware_limits?: DockerHardwareLimits;
+  can_create_game_servers?: boolean;
+}
+
+export interface UserInvite {
+  uuid: string;
+  username: string;
+  /** The redeem token — POST /user-invites/use/{secret_key}. */
+  secret_key: string;
+  role?: UserRole | null;
+  docker_hardware_limits?: DockerHardwareLimits;
+  can_create_game_servers?: boolean;
+}
+
+/** GameServerLogMessageEntity — history rows are objects, not strings. */
+export interface GameServerLogMessage {
+  game_server_uuid: string;
+  message: string;
+  level: 'INFO' | 'ERROR' | 'INPUT' | 'COSY_INFO' | 'COSY_DEBUG' | 'COSY_ERROR';
+  timestamp: string;
+}
+
+export interface MetricValues {
+  cpu_percent?: number;
+  memory_percent?: number;
+  memory_usage?: number;
+  memory_limit?: number;
+  network_input?: number;
+  network_output?: number;
+}
+
+export interface MetricPoint {
+  game_server_uuid: string;
+  time: string;
+  metric_values: MetricValues;
+}
+
+export interface Template {
+  uuid: string;
+  name: string;
+  game_id: string;
+  docker_image_name?: string;
+  docker_image_tag?: string;
+}
+
+export interface Game {
+  game_uuid: string;
+  name: string;
+  external_game_id?: number;
+  slug?: string;
+  /** Grid/artwork image. */
+  hero_url?: string;
+  logo_url?: string;
+}
+
+export type WebhookType = 'DISCORD' | 'SLACK' | 'N8N';
+export type GameServerEventType = 'SERVER_STARTED' | 'SERVER_STOPPED' | 'SERVER_FAILED';
+
+export interface Webhook {
+  uuid: string;
+  webhook_type: WebhookType;
+  webhook_url: string;
+  enabled: boolean;
+  subscribed_events: GameServerEventType[];
+}
+
+export type GameServerDesign = 'HOUSE' | 'CASTLE';
+
+/** Subset of GameServerAccessPermission used by the access-management spec. */
+export type GameServerAccessPermission =
+  | 'ADMIN'
+  | 'SEE_SERVER'
+  | 'START_STOP_SERVER'
+  | 'READ_SERVER_LOGS'
+  | 'READ_SERVER_METRICS'
+  | 'SEND_COMMANDS'
+  | 'CHANGE_SERVER_FILES'
+  | 'CHANGE_SERVER_CONFIGS';
+
+export interface AccessGroup {
+  uuid: string;
+  group_name: string;
+  permissions: GameServerAccessPermission[];
+  users: UserEntity[];
+  game_server_uuid: string;
+}
+
+export interface RconConfiguration {
+  enabled: boolean;
+  port: number;
+  password: string;
+}
+
+/** A fully-usable second account created over the API for multi-user specs. */
+export interface ProvisionedUser {
+  uuid: string;
+  username: string;
+  /** The final (post-forced-change) password. */
+  password: string;
 }
 
 export class ApiClient {
@@ -103,6 +222,9 @@ export class ApiClient {
       ...(input.memory_limit
         ? { docker_hardware_limits: { docker_memory_limit: input.memory_limit } }
         : {}),
+      ...(input.environment_variables
+        ? { environment_variables: input.environment_variables }
+        : {}),
     };
     return this.send<GameServer>('POST', '/game-server', body);
   }
@@ -158,6 +280,232 @@ export class ApiClient {
       docker_image_tag: 'latest',
       memory_limit: memoryLimit,
     });
+  }
+
+  /** Return a named server, creating it from an arbitrary image if absent. */
+  async getOrCreateServer(input: CreateGameServerInput): Promise<GameServer> {
+    const existing = (await this.listServers()).find((s) => s.server_name === input.server_name);
+    if (existing) return existing;
+    return this.createServer(input);
+  }
+
+  // ── invites & users (setup/teardown for invites/user-management/access specs) ─
+
+  async createInvite(input: {
+    username: string;
+    role?: UserRole;
+    can_create_game_servers?: boolean;
+  }): Promise<UserInvite> {
+    return this.send<UserInvite>('POST', '/user-invites', input, 'Create invite');
+  }
+
+  /** Redeem an invite (the token is a PATH variable, not a query/body field). */
+  async redeemInvite(secretKey: string, username: string, password: string): Promise<UserEntity> {
+    return this.send<UserEntity>(
+      'POST',
+      `/user-invites/use/${encodeURIComponent(secretKey)}`,
+      { username, password },
+      'Redeem invite',
+    );
+  }
+
+  async deleteInvite(uuid: string): Promise<void> {
+    await this.send<void>('DELETE', `/user-invites/${uuid}`);
+  }
+
+  async listUsers(): Promise<UserEntity[]> {
+    return this.send<UserEntity[]>('GET', '/user-entity');
+  }
+
+  async getUser(uuid: string): Promise<UserEntity> {
+    return this.send<UserEntity>('GET', `/user-entity/${uuid}`);
+  }
+
+  async deleteUser(uuid: string): Promise<void> {
+    await this.send<void>('DELETE', `/user-entity/${uuid}`);
+  }
+
+  /** Complete a forced first-login password change (old = redeem password). */
+  async changePassword(uuid: string, oldPassword: string, newPassword: string): Promise<void> {
+    await this.send<void>(
+      'PATCH',
+      `/user-entity/${uuid}/change-password`,
+      { old_password: oldPassword, new_password: newPassword },
+      'Change password',
+    );
+  }
+
+  async changeRole(uuid: string, role: UserRole): Promise<UserEntity> {
+    return this.send<UserEntity>('PATCH', `/user-entity/${uuid}/change-role`, { role }, 'Change role');
+  }
+
+  async updateDockerLimits(uuid: string, limits: DockerHardwareLimits): Promise<UserEntity> {
+    return this.send<UserEntity>(
+      'PATCH',
+      `/user-entity/${uuid}/docker-limits`,
+      { docker_hardware_limits: limits },
+      'Update docker limits',
+    );
+  }
+
+  /**
+   * Provision a fully-usable second account over the API in one call — invite,
+   * redeem, and complete the forced password change — for specs that need a real
+   * non-admin user as a precondition (not as the feature under test).
+   */
+  async provisionUser(username: string, finalPassword: string): Promise<ProvisionedUser> {
+    const invite = await this.createInvite({ username, role: 'QUOTA_USER' });
+    const tempPassword = `Temp-${finalPassword}`;
+    const user = await this.redeemInvite(invite.secret_key, username, tempPassword);
+    await this.changePassword(user.uuid, tempPassword, finalPassword);
+    return { uuid: user.uuid, username, password: finalPassword };
+  }
+
+  // ── logs & metrics (fallback asserts / readiness polling) ───────────────────
+
+  async getLogs(uuid: string, limit = 500, sinceHours = 5): Promise<GameServerLogMessage[]> {
+    // Query-param names are NOT snake_cased (only JSON bodies are) — sinceHours.
+    return this.send<GameServerLogMessage[]>(
+      'GET',
+      `/game-server/${uuid}/logs?limit=${limit}&sinceHours=${sinceHours}`,
+    );
+  }
+
+  /**
+   * Poll the history endpoint until a log line matches `pattern` (or time out).
+   * Used to detect container readiness (e.g. itzg "Done") and as a fallback assert
+   * that historical Loki-backed lines exist. Loki ingestion lags, hence the poll.
+   */
+  async waitForLogMatch(
+    uuid: string,
+    pattern: RegExp,
+    timeoutMs: number,
+  ): Promise<GameServerLogMessage> {
+    const deadline = Date.now() + timeoutMs;
+    let count = 0;
+    while (Date.now() < deadline) {
+      const lines = await this.getLogs(uuid, 1000, 5);
+      count = lines.length;
+      const hit = lines.find((l) => pattern.test(l.message));
+      if (hit) return hit;
+      await sleep(STATUS_POLL_INTERVAL_MS);
+    }
+    throw new Error(
+      `No log line matching ${pattern} for server ${uuid} within ${timeoutMs}ms ` +
+        `(saw ${count} lines).`,
+    );
+  }
+
+  async getMetrics(uuid: string, pointCount = 100): Promise<MetricPoint[]> {
+    return this.send<MetricPoint[]>('GET', `/game-server/${uuid}/metrics?pointCount=${pointCount}`);
+  }
+
+  async getPublicMetrics(uuid: string, pointCount = 100): Promise<MetricPoint[]> {
+    return this.send<MetricPoint[]>(
+      'GET',
+      `/game-server/${uuid}/metrics/public?pointCount=${pointCount}`,
+    );
+  }
+
+  // ── templates & games (verify hosted catalog reachability) ──────────────────
+
+  async listTemplates(): Promise<Template[]> {
+    return this.send<Template[]>('GET', '/templates');
+  }
+
+  async searchGames(query: string): Promise<Game[]> {
+    return this.send<Game[]>('GET', `/games?query=${encodeURIComponent(query)}`);
+  }
+
+  // ── rcon & console command ──────────────────────────────────────────────────
+
+  async setRconConfiguration(uuid: string, config: RconConfiguration): Promise<GameServer> {
+    // RCONConfiguration fields are single-word — no snake conversion.
+    return this.send<GameServer>('PATCH', `/game-server/${uuid}/rcon-configuration`, config);
+  }
+
+  /** Fire-and-forget console command (204; any response surfaces in the log stream). */
+  async sendCommand(uuid: string, command: string): Promise<void> {
+    await this.send<void>('POST', `/game-server/${uuid}/send-command`, { command });
+  }
+
+  // ── webhooks ────────────────────────────────────────────────────────────────
+
+  async listWebhooks(uuid: string): Promise<Webhook[]> {
+    return this.send<Webhook[]>('GET', `/game-server/${uuid}/webhooks`);
+  }
+
+  async createWebhook(
+    uuid: string,
+    input: {
+      webhook_type: WebhookType;
+      webhook_url: string;
+      subscribed_events: GameServerEventType[];
+      enabled?: boolean;
+    },
+  ): Promise<Webhook> {
+    return this.send<Webhook>('POST', `/game-server/${uuid}/webhooks`, {
+      enabled: true,
+      ...input,
+    });
+  }
+
+  async deleteWebhook(uuid: string, webhookUuid: string): Promise<void> {
+    await this.send<void>('DELETE', `/game-server/${uuid}/webhooks/${webhookUuid}`);
+  }
+
+  // ── access groups ────────────────────────────────────────────────────────────
+
+  async createAccessGroup(uuid: string, name: string): Promise<AccessGroup> {
+    // AccessGroupCreationDto.name is single-word (no @JsonNaming on this DTO).
+    return this.send<AccessGroup>('POST', `/game-server/${uuid}/access-groups`, { name });
+  }
+
+  /** Add members + grant permissions (replaces the group's membership/permissions). */
+  async updateAccessGroup(
+    uuid: string,
+    groupUuid: string,
+    input: {
+      access_group_name: string;
+      user_uuids: string[];
+      permissions: GameServerAccessPermission[];
+    },
+  ): Promise<AccessGroup[]> {
+    return this.send<AccessGroup[]>(
+      'PATCH',
+      `/game-server/${uuid}/access-groups/${groupUuid}`,
+      input,
+    );
+  }
+
+  async deleteAccessGroup(uuid: string, groupUuid: string): Promise<void> {
+    await this.send<void>('DELETE', `/game-server/${uuid}/access-groups/${groupUuid}`);
+  }
+
+  // ── design & public dashboard ────────────────────────────────────────────────
+
+  async setDesign(uuid: string, design: GameServerDesign): Promise<GameServer> {
+    return this.send<GameServer>('PATCH', `/game-server/${uuid}/design`, { design });
+  }
+
+  async setPublicDashboard(
+    uuid: string,
+    enabled: boolean,
+    layouts: unknown[] = [],
+  ): Promise<void> {
+    await this.send<void>('PATCH', `/game-server/${uuid}/layout/public-dashboard`, {
+      enabled,
+      layouts,
+    });
+  }
+
+  /**
+   * Set the server's metric dashboard layout (setup) so the metrics page renders
+   * the expected CPU/Memory cards deterministically. Body is a List<MetricLayout>
+   * ({ size, metric_type }).
+   */
+  async setMetricLayout(uuid: string, layouts: unknown[]): Promise<void> {
+    await this.send<void>('PATCH', `/game-server/${uuid}/layout/metric`, layouts);
   }
 
   // ── internals ─────────────────────────────────────────────────────────────

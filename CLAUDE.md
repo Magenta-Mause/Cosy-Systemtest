@@ -44,8 +44,11 @@ npx playwright test --list   # lists all specs even with no install present
    are proven through the UI.
 5. **Timeouts are named constants** in `helpers/constants.ts` — never inline magic
    numbers. They are deliberately generous (fresh-runner install + cold image pull).
-6. **Suite selection is by Playwright tags** (`@core`), not npm-script file lists.
-   Tag every new spec; add its feature key to the matrix in the README.
+6. **Suite selection is by Playwright tags**, not npm-script file lists. Tag every
+   new spec `@core` (install → lifecycle → uninstall) or `@extended` (rest of the
+   matrix), and add its feature key to the README matrix. The runner records one
+   result row per spec **file** regardless of tag, so keep one feature per file,
+   named exactly like the feature key.
 7. **Skip guard:** install-gated specs call `runsOnlyWithInstall()` in the describe
    body so they stay listable without an install and skip with one uniform reason.
 8. **Runner semantics:** `scripts/run-systemtest.ts` exits 0 even when features fail
@@ -57,10 +60,36 @@ npx playwright test --list   # lists all specs even with no install present
 ## Layout
 
 ```
-tests/specs/      one spec file per feature (install, auth, server-create, …)
-tests/pages/      page objects (login, home, create-server, server-detail, console, files)
-tests/fixtures/   custom test/expect, runsOnlyWithInstall, adminCreds/apiClient/sharedServer/loggedInPage
-tests/helpers/    install.ts (cred parsing), api.ts (typed client), constants.ts (urls + timeouts)
+tests/specs/      one spec file per feature (install, auth, invites, rcon, …)
+tests/pages/      page objects (login, home, create-server, server-detail, console,
+                  files, users, settings-pages, metrics, public-dashboard-view)
+tests/fixtures/   custom test/expect, runsOnlyWithInstall, adminCreds/apiClient/
+                  sharedServer/minecraftServer/loggedInPage/secondUserContext/webhookSink
+tests/helpers/    install.ts (cred parsing), api.ts (typed client), constants.ts
+                  (urls + timeouts), webhook-sink.ts (delivery sink + gateway discovery)
 scripts/          run-systemtest.ts
 .github/workflows/systemtest.yml
 ```
+
+## Phase 2 conventions worth knowing
+
+- **Spec independence over shared state.** Specs that mutate a server's run state
+  (stop it to fire an event, rename it, etc.) provision their **own** throwaway
+  server rather than the worker `sharedServer`, so they cannot race the specs that
+  need it running. Only read-only-on-run-state specs (`metrics`, `public-dashboard`)
+  share it. The heavyweight Minecraft path is split: `server-from-template` creates
+  its own server through the template UI (that UI is its feature); `rcon` uses the
+  API-provisioned `minecraftServer` fixture — never a cross-file ordering dependency.
+- **Webhook delivery networking.** The backend runs inside the compose network, so a
+  sink on the runner host is NOT reachable at `localhost` from the container. The
+  `webhookSink` fixture binds `0.0.0.0` and hands out a URL whose host is the Docker
+  bridge gateway (discovered via `docker network inspect`; falls back to
+  `172.17.0.1`). A delivery timeout message distinguishes "webhook broken" from
+  "runner networking wrong". See `helpers/webhook-sink.ts`.
+- **Hosted template/game APIs.** The compose install sets no template/games-api
+  override, so `templates` and `games-search` hit the hosted public services — a
+  hosted outage is expected to red exactly those two rows.
+- **Wire format stays snake_case** in both directions for multi-word JSON fields (see
+  `api.ts` banner). A few backend DTOs use single-word fields that are NOT converted
+  (`RCONConfiguration.enabled/port/password`, `AccessGroupCreationDto.name`) — verify
+  each field against the DTO, don't assume.

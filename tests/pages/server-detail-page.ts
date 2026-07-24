@@ -62,6 +62,15 @@ export class ServerDetailPage {
     });
   }
 
+  /**
+   * Assert the start/stop control is NOT available (used to verify a restricted
+   * user without START_STOP_SERVER cannot control the server).
+   */
+  async expectNoStartStopControl(): Promise<void> {
+    await expect(this.startButton).toHaveCount(0, { timeout: UI_ACTION_TIMEOUT_MS });
+    await expect(this.stopButton).toHaveCount(0, { timeout: UI_ACTION_TIMEOUT_MS });
+  }
+
   async start(): Promise<void> {
     await this.startButton.click();
   }

@@ -10,6 +10,7 @@
   "scripts": {
     "test": "playwright test",
     "test:core": "playwright test --grep @core",
+    "test:extended": "playwright test --grep @extended",
     "typecheck": "tsc --noEmit",
     "systemtest": "tsx scripts/run-systemtest.ts",
     "report": "playwright show-report"
