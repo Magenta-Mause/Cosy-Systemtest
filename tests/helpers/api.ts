@@ -159,7 +159,7 @@ export interface RconConfiguration {
 export interface ProvisionedUser {
   uuid: string;
   username: string;
-  /** The final (post-forced-change) password. */
+  /** The password the account was provisioned with (usable for UI login). */
   password: string;
 }
 
@@ -222,8 +222,17 @@ export class ApiClient {
       ...(input.memory_limit
         ? { docker_hardware_limits: { docker_memory_limit: input.memory_limit } }
         : {}),
+      // GameServerCreationDto.environmentVariables is a
+      // List<EnvironmentVariableConfiguration> ({ key, value }), NOT a map. Reshape
+      // the convenient Record input into that list shape (key/value are single-word
+      // fields → no snake conversion). Sending a bare map yields a 400
+      // ("this endpoint expects a different request body").
       ...(input.environment_variables
-        ? { environment_variables: input.environment_variables }
+        ? {
+            environment_variables: Object.entries(input.environment_variables).map(
+              ([key, value]) => ({ key, value }),
+            ),
+          }
         : {}),
     };
     return this.send<GameServer>('POST', '/game-server', body);
@@ -325,16 +334,6 @@ export class ApiClient {
     await this.send<void>('DELETE', `/user-entity/${uuid}`);
   }
 
-  /** Complete a forced first-login password change (old = redeem password). */
-  async changePassword(uuid: string, oldPassword: string, newPassword: string): Promise<void> {
-    await this.send<void>(
-      'PATCH',
-      `/user-entity/${uuid}/change-password`,
-      { old_password: oldPassword, new_password: newPassword },
-      'Change password',
-    );
-  }
-
   async changeRole(uuid: string, role: UserRole): Promise<UserEntity> {
     return this.send<UserEntity>('PATCH', `/user-entity/${uuid}/change-role`, { role }, 'Change role');
   }
@@ -349,15 +348,20 @@ export class ApiClient {
   }
 
   /**
-   * Provision a fully-usable second account over the API in one call — invite,
-   * redeem, and complete the forced password change — for specs that need a real
-   * non-admin user as a precondition (not as the feature under test).
+   * Provision a fully-usable second account over the API in one call — invite +
+   * redeem with the FINAL password — for specs that need a real non-admin user as a
+   * precondition (not as the feature under test).
+   *
+   * Redeeming an invite sets the account password directly (UserInviteService
+   * encodes the supplied password), and no forced first-login change is enforced
+   * (`defaultPasswordReset` is a dormant no-op — see docs/KNOWN-ISSUES.md), so the
+   * user can log in with `finalPassword` immediately. We deliberately do NOT call
+   * `/user-entity/{uuid}/change-password`: that is the SELF endpoint and returns
+   * 403 FORBIDDEN when invoked with the admin bearer for another user's uuid.
    */
   async provisionUser(username: string, finalPassword: string): Promise<ProvisionedUser> {
     const invite = await this.createInvite({ username, role: 'QUOTA_USER' });
-    const tempPassword = `Temp-${finalPassword}`;
-    const user = await this.redeemInvite(invite.secret_key, username, tempPassword);
-    await this.changePassword(user.uuid, tempPassword, finalPassword);
+    const user = await this.redeemInvite(invite.secret_key, username, finalPassword);
     return { uuid: user.uuid, username, password: finalPassword };
   }
 
