@@ -18,6 +18,14 @@ import { CreateServerPage, HomePage } from '@pages/index';
  * unambiguously-named games are asserted by name; cs2 and ark ship under their
  * catalog display names ("Counter-Strike 2", "ARK: Survival Evolved"). The
  * "catalog loads" proof is that Minecraft's templates render.
+ *
+ * EXPECTED RED on released v1.0.3 — this spec is doing its job. Template selection is
+ * genuinely broken in the release: Step2 compares the template's STRING `game_id`
+ * ("minecraft") against the NUMERIC `external_game_id` from the games API, so no
+ * template ever matches and step 2 always says "No templates are available". Fixed on
+ * frontend main, unreleased. Do NOT weaken or skip this spec — it goes green by itself
+ * once a release ships the fix. Full chain + evidence: docs/KNOWN-ISSUES.md
+ * ("CONFIRMED PRODUCT BUG — catalog template selection").
  */
 test.describe('@extended templates', () => {
   runsOnlyWithInstall();

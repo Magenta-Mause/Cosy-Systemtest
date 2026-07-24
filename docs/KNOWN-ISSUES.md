@@ -217,6 +217,40 @@ GitHub-hosted runners with a documented note ("Minecraft does not reliably boot 
 budget on the 4-vCPU runner; RCON is exercised locally / needs a lighter RCON-capable
 image").
 
+## CONFIRMED PRODUCT BUG — catalog template selection is broken in released v1.0.3
+
+**No user can select any template in the create wizard.** Step 2 always renders
+"No templates are available for this game.", for *every* game. `templates` and
+`server-from-template` are therefore **correctly RED**: they are detecting a genuine
+broken feature, not a test defect. **Do not weaken or skip them** — they will go green
+on their own once a release ships the fix.
+
+**The chain (each link verified):**
+
+1. The hosted template service (v3) serves `game_id` as a **string slug** —
+   e.g. `"minecraft"` (confirmed live against the hosted API).
+2. The backend passes it through unchanged: `ExternalTemplateDto.java:18` declares
+   `@JsonProperty("game_id") String gameId` — a **String**.
+3. The games API (`cosy-game-api`, SteamGridDB proxy) is a *different* catalog and
+   yields a **numeric** id; selecting a game in step 1 stores that number as
+   `external_game_id` (e.g. `30203` for Minecraft).
+4. Released frontend `CreationSteps/Step2.tsx:22-23` filters:
+   `templates.filter((template) => template.game_id === creationState.gameServerState.external_game_id)`
+
+`"minecraft" === 30203` is a strict comparison between a String and a Number, so it is
+**always false** → `templatesForGame` is always empty → Step 2 short-circuits to its
+"no templates" branch (which renders no listbox at all).
+
+**Status: fixed on frontend `main`, unreleased.** The sentinel comment in `context.ts`
+("Sentinel game_id (string, since template game_id is now a slug-or-numeric string)")
+shows the type mismatch was addressed after 5dba6e8. This is a **released-only defect
+awaiting the next release**.
+
+**Why the suite reports it well:** `create-server-page.ts`'s `waitForTemplateOptions()`
+polls generously and, on failure, reports that the wizard itself said no templates are
+available for the game — explicitly distinguishing a real empty catalog from a wrong
+selector, so the red row names the product bug rather than implicating the test.
+
 ## rcon is QUARANTINED on CI (Minecraft never boots on a GitHub-hosted runner)
 
 `rcon` is gated behind **`SYSTEMTEST_HEAVY`** (`runsOnlyWithHeavyEnabled()`), so the
