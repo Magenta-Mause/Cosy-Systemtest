@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Playwright output
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+
+# Systemtest runner output
+results/
+
+# Local env / secrets (never commit installer creds or endpoints)
+.env
+.env.*
+
+# Installer artifacts produced during a local/CI run
+install.log
+*.log
+
+# OS / editor noise
+.DS_Store

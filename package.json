@@ -1,0 +1,28 @@
+{
+  "name": "cosy-systemtest",
+  "version": "1.0.0",
+  "description": "End-to-end system tests for Cosy: install from scratch via install_cosy.sh, drive every feature through the real UI, report per-feature pass/fail.",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "test:core": "playwright test --grep @core",
+    "typecheck": "tsc --noEmit",
+    "systemtest": "tsx scripts/run-systemtest.ts",
+    "report": "playwright show-report"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Magenta-Mause/Cosy-Systemtest.git"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0"
+  }
+}
