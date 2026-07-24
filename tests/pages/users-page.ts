@@ -128,36 +128,40 @@ export class UsersPage {
   }
 
   /**
-   * Set a quota-user's docker limits via the row menu → "Change Permissions".
-   * Values are the raw numeric strings for the CPU (cores) and Memory (MiB) inputs.
+   * Set a quota-user's docker limits via the row menu → "Edit Resource Limits"
+   * (the released UpdateDockerLimitsModal). Values are the raw numeric strings for
+   * the CPU-cores input (`#docker-cpu-limit`) and the Memory input
+   * (`#docker-memory-limit`, a number field whose unit Select defaults to MiB — so a
+   * raw MiB value needs no unit change). Save button is "Save".
    */
   async setQuota(username: string, opts: { cpu?: string; memoryMiB?: string }): Promise<void> {
     await this.openRowMenu(username);
-    await this.page.getByRole('menuitem', { name: 'Change Permissions' }).click();
+    // TODO(testid): add data-testid="user-edit-limits" to UserRow editDockerLimits item
+    await this.page.getByRole('menuitem', { name: 'Edit Resource Limits' }).click();
     const dialog = this.dialog;
-    await expect(dialog.getByText('Change Permissions', { exact: true })).toBeVisible({
+    await expect(dialog.getByText('Edit Resource Limits', { exact: true })).toBeVisible({
       timeout: UI_ACTION_TIMEOUT_MS,
     });
     if (opts.cpu !== undefined) {
-      await dialog.locator('#permissions-cpu-limit').fill(opts.cpu);
+      await dialog.locator('#docker-cpu-limit').fill(opts.cpu);
     }
     if (opts.memoryMiB !== undefined) {
-      await dialog.locator('#permissions-memory-limit').fill(opts.memoryMiB);
+      await dialog.locator('#docker-memory-limit').fill(opts.memoryMiB);
     }
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(dialog).toBeHidden({ timeout: UI_FLOW_TIMEOUT_MS });
   }
 
   /**
-   * Verify a quota user's CPU-cores limit persisted, by reopening the Change
-   * Permissions modal and reading the CPU input (a plain cores value, unlike the
-   * memory field which carries a unit select). Cancels without changes.
+   * Verify a quota user's CPU-cores limit persisted, by reopening the "Edit Resource
+   * Limits" modal and reading the CPU input (the modal seeds it from the user's saved
+   * `docker_max_cpu_cores`). Cancels without changes.
    */
   async expectQuotaCpu(username: string, cpuCores: string): Promise<void> {
     await this.openRowMenu(username);
-    await this.page.getByRole('menuitem', { name: 'Change Permissions' }).click();
+    await this.page.getByRole('menuitem', { name: 'Edit Resource Limits' }).click();
     const dialog = this.dialog;
-    await expect(dialog.locator('#permissions-cpu-limit')).toHaveValue(cpuCores, {
+    await expect(dialog.locator('#docker-cpu-limit')).toHaveValue(cpuCores, {
       timeout: UI_FLOW_TIMEOUT_MS,
     });
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
