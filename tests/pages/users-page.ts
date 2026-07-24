@@ -85,7 +85,15 @@ export class UsersPage {
   }
 
   async expectUserVisible(username: string): Promise<void> {
-    await expect(this.userCard(username)).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    // A freshly-provisioned user may not be in the client's cached user list yet:
+    // UserTable renders from the `users` redux slice, which is populated by a fetch
+    // that can lag an API-side create, so the row is briefly absent (run 12 found 0
+    // cards). Reload /users to force a fresh fetch and retry until the (visible) card
+    // appears, rather than failing on the first, possibly-stale, render.
+    await expect(async () => {
+      await this.page.reload();
+      await expect(this.userCard(username)).toHaveCount(1, { timeout: UI_ACTION_TIMEOUT_MS });
+    }).toPass({ timeout: UI_FLOW_TIMEOUT_MS });
   }
 
   async expectUserAbsent(username: string): Promise<void> {
