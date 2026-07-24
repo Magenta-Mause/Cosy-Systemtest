@@ -1,0 +1,158 @@
+name: systemtest
+
+# Phase 1: release channel only — nightly cron + manual trigger. The staging
+# channel (repository_dispatch) and OTLP reporting arrive in later phases.
+on:
+  schedule:
+    # 02:30 UTC nightly — installs the currently published Cosy from scratch.
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this manual run was triggered (shows up in the run log)"
+        required: false
+        default: "manual run"
+
+# Release runs must not cancel each other: a nightly and a manual run should both
+# complete rather than the newer one killing the older (unlike staging later).
+concurrency:
+  group: systemtest-release
+  cancel-in-progress: false
+
+jobs:
+  systemtest:
+    runs-on: ubuntu-latest
+    # Whole job budget; a healthy run is ~25-40 min, install + pull included.
+    timeout-minutes: 60
+
+    env:
+      # Where install_cosy.sh (docker) puts everything by default.
+      INSTALL_DIR: /opt/cosy
+      COSY_BASE_URL: http://localhost:8080
+      COSY_CHANNEL: release
+
+    steps:
+      - name: Log trigger reason
+        run: |
+          echo "Trigger: ${{ github.event_name }} - ${{ github.event.inputs.reason || 'scheduled' }}"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install test dependencies
+        run: npm ci
+
+      # No pre-built runner image on purpose: `playwright install` keeps the browser
+      # in lockstep with the pinned @playwright/test version (image-tag drift was a
+      # known 100%-red failure mode in the sibling repo).
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+
+      # Fetch the installer exactly as a real user would (release channel = main).
+      - name: Download install_cosy.sh
+        run: |
+          curl -fsSL \
+            https://raw.githubusercontent.com/Magenta-Mause/Cosy/main/install_cosy.sh \
+            -o install_cosy.sh
+
+      # Install Cosy from scratch, teeing stdout so the suite can parse the printed
+      # admin credentials. We capture the installer's exit code WITHOUT letting the
+      # pipe (pipefail is on by default here) abort the job — the health poll below
+      # is our real gate, since the script's own 180s cap is the known flakiness.
+      - name: Install Cosy
+        run: |
+          set +e
+          sudo bash install_cosy.sh docker --default --port 8080 --domain localhost 2>&1 | tee install.log
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "Installer exited with code ${code}."
+          echo "INSTALL_LOG=${GITHUB_WORKSPACE}/install.log" >> "$GITHUB_ENV"
+
+      # Own health gate: poll for up to 10 minutes rather than trusting the script's
+      # exit alone. Distinguish "degraded" (reachable but not UP) from "ok" per plan
+      # 3.1; either way we proceed so the suite records the precise feature status.
+      - name: Wait for stack health
+        run: |
+          deadline=$(( $(date +%s) + 600 ))
+          status="unreachable"
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            body=$(curl -fsS "${COSY_BASE_URL}/api/actuator/health" 2>/dev/null || true)
+            if echo "$body" | grep -q '"status":"UP"'; then
+              status="ok"; break
+            elif [ -n "$body" ]; then
+              status="degraded"
+            fi
+            sleep 10
+          done
+          echo "Health status: ${status}"
+          # Never fail here — install.spec is the source of truth for the install row.
+
+      # Metrics-are-truth: this step exits 0 even when features fail; it only fails
+      # on an infrastructure error (Playwright produced no report).
+      - name: Run systemtest suite
+        run: npx tsx scripts/run-systemtest.ts
+
+      - name: Download uninstall_cosy.sh
+        if: always()
+        run: |
+          curl -fsSL \
+            https://raw.githubusercontent.com/Magenta-Mause/Cosy/main/uninstall_cosy.sh \
+            -o uninstall_cosy.sh
+
+      - name: Uninstall Cosy
+        if: always()
+        run: sudo bash uninstall_cosy.sh docker -y
+
+      # Teardown is itself a tested feature: assert nothing is left behind and append
+      # an `uninstall` row to the summary the runner wrote.
+      - name: Assert clean teardown
+        if: always()
+        run: |
+          start=$(date +%s)
+          status="passed"
+
+          leftover_containers=$(docker ps -a --format '{{.Names}}' | grep '^cosy-' || true)
+          if [ -n "$leftover_containers" ]; then
+            echo "FAIL: leftover cosy-* containers:"; echo "$leftover_containers"
+            status="failed"
+          fi
+
+          if [ -d "${INSTALL_DIR}" ]; then
+            echo "FAIL: install dir ${INSTALL_DIR} still exists."
+            status="failed"
+          fi
+
+          duration=$(( $(date +%s) - start ))
+          echo "uninstall assertion: ${status}"
+
+          # Append the uninstall feature row (summary.json exists if the runner ran).
+          if [ -f results/summary.json ]; then
+            tmp=$(mktemp)
+            jq --arg s "$status" --argjson d "$duration" \
+              '.features += [{"feature":"uninstall","status":$s,"durationSeconds":$d}]' \
+              results/summary.json > "$tmp" && mv "$tmp" results/summary.json
+          fi
+
+      # Report + results always (14 days) so a red night is debuggable from the run.
+      - name: Upload report and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: systemtest-report
+          path: |
+            playwright-report/
+            results/
+          retention-days: 14
+
+      # Traces/videos only on failure — they are large and only needed to debug reds.
+      - name: Upload traces and videos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: systemtest-traces
+          path: test-results/
+          retention-days: 14
