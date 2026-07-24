@@ -37,7 +37,10 @@ export class UsersPage {
     // visible "Invite User" text).
     // TODO(testid): add data-testid="invite-user-btn" to UserInviteButton
     await this.page.getByRole('button', { name: 'Users' }).click();
-    await expect(this.dialog.getByText('Invite User', { exact: true })).toBeVisible({
+    // Dialog titles are matched by heading ROLE, not text: a dialog's title and one
+    // of its buttons can share the same label (see deleteUser), and role-scoping is
+    // immune to that collision.
+    await expect(this.dialog.getByRole('heading', { name: 'Invite User' })).toBeVisible({
       timeout: UI_ACTION_TIMEOUT_MS,
     });
 
@@ -126,7 +129,7 @@ export class UsersPage {
     await this.openRowMenu(username);
     await this.page.getByRole('menuitem', { name: 'Change Role' }).click();
     const dialog = this.dialog;
-    await expect(dialog.getByText('Change Role', { exact: true })).toBeVisible({
+    await expect(dialog.getByRole('heading', { name: 'Change Role' })).toBeVisible({
       timeout: UI_ACTION_TIMEOUT_MS,
     });
     await dialog.getByRole('combobox').click();
@@ -170,7 +173,7 @@ export class UsersPage {
     // TODO(testid): add data-testid="user-edit-limits" to UserRow editDockerLimits item
     await this.page.getByRole('menuitem', { name: 'Edit Resource Limits' }).click();
     const dialog = this.dialog;
-    await expect(dialog.getByText('Edit Resource Limits', { exact: true })).toBeVisible({
+    await expect(dialog.getByRole('heading', { name: 'Edit Resource Limits' })).toBeVisible({
       timeout: UI_ACTION_TIMEOUT_MS,
     });
     if (opts.cpu !== undefined) {
@@ -210,12 +213,20 @@ export class UsersPage {
     }).toPass({ timeout: UI_FLOW_TIMEOUT_MS });
   }
 
-  /** Delete a user via the row menu → "Delete User" confirmation. */
+  /**
+   * Delete a user via the row menu → "Delete User" confirmation.
+   *
+   * The confirm dialog's TITLE and its CONFIRM BUTTON both read "Delete User", so a
+   * text-based lookup matches two elements (`<h2 data-slot="dialog-title">` and
+   * `<button data-slot="button">`) and trips strict mode. Assert the title by its
+   * heading ROLE and click the button by its button role — role-scoping keeps the two
+   * unambiguous even though their text is identical.
+   */
   async deleteUser(username: string): Promise<void> {
     await this.openRowMenu(username);
     await this.page.getByRole('menuitem', { name: 'Delete User' }).click();
     const dialog = this.dialog;
-    await expect(dialog.getByText('Delete User', { exact: true })).toBeVisible({
+    await expect(dialog.getByRole('heading', { name: 'Delete User' })).toBeVisible({
       timeout: UI_ACTION_TIMEOUT_MS,
     });
     await dialog.getByRole('button', { name: 'Delete User', exact: true }).click();
