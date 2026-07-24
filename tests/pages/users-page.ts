@@ -70,7 +70,18 @@ export class UsersPage {
   /** A user's row card, located by the username it contains. */
   private userCard(username: string): Locator {
     // TODO(testid): add data-testid={`user-row-${uuid}`} to UserRow Card
-    return this.page.locator('[data-slot="card"]').filter({ hasText: username });
+    //
+    // The `/users` route renders the UserTable TWICE — once in a mobile layout
+    // (`lg:hidden`) and once in a desktop layout (`hidden lg:block`) — so every
+    // user's card exists twice in the DOM (one hidden by CSS at any viewport).
+    // A bare `hasText` filter therefore matches 2 elements and trips strict mode.
+    // Restrict to the VISIBLE layout's card (at the 1280px test viewport that is
+    // the desktop one); this keeps every card-derived locator (row menu, badges)
+    // unambiguous regardless of which layout is active.
+    return this.page
+      .locator('[data-slot="card"]')
+      .filter({ hasText: username })
+      .filter({ visible: true });
   }
 
   async expectUserVisible(username: string): Promise<void> {
