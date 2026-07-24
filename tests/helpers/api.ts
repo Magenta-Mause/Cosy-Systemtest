@@ -48,46 +48,43 @@ export class ApiClient {
 
   /** Log in and obtain a bearer identity token for subsequent calls. */
   async login(creds: AdminCredentials): Promise<void> {
-    const loginRes = await fetch(`${this.apiBase}/auth/login?tokenMode=DIRECT`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: creds.username, password: creds.password }),
-    });
-    if (!loginRes.ok) {
-      throw new Error(`Login failed: ${loginRes.status} ${await safeText(loginRes)}`);
-    }
-    const { refreshToken } = (await loginRes.json()) as { refreshToken?: string };
-    if (!refreshToken) throw new Error('Login response did not contain a refreshToken.');
-    this.refreshToken = refreshToken;
+    const dto = await this.send<{ refreshToken?: string }>(
+      'POST',
+      '/auth/login?tokenMode=DIRECT',
+      { username: creds.username, password: creds.password },
+      'Login',
+    );
+    if (!dto?.refreshToken) throw new Error('Login response did not contain a refreshToken.');
+    this.refreshToken = dto.refreshToken;
     await this.refreshBearer();
   }
 
   /** Exchange the refresh token for a fresh identity (bearer) token. */
   async refreshBearer(): Promise<string> {
     if (!this.refreshToken) throw new Error('Not logged in — call login() first.');
+    // /auth/token returns a String body, which the backend still wraps in the
+    // global envelope (data = the token string).
     const res = await fetch(`${this.apiBase}/auth/token`, {
       headers: { Cookie: `refreshToken=${this.refreshToken}` },
     });
-    if (!res.ok) throw new Error(`Token exchange failed: ${res.status} ${await safeText(res)}`);
-    this.bearer = (await res.text()).trim();
+    const token = await unwrap<string>(res, 'Token exchange');
+    this.bearer = token?.trim() ?? null;
     if (!this.bearer) throw new Error('Token endpoint returned an empty identity token.');
     return this.bearer;
   }
 
   async logout(): Promise<void> {
-    await fetch(`${this.apiBase}/auth/logout`, { method: 'POST', headers: this.authHeaders() });
+    await this.send<void>('POST', '/auth/logout', undefined, 'Logout');
     this.bearer = null;
     this.refreshToken = null;
   }
 
   async listServers(): Promise<GameServer[]> {
-    const res = await this.get('/game-server');
-    return (await res.json()) as GameServer[];
+    return this.send<GameServer[]>('GET', '/game-server');
   }
 
   async getServer(uuid: string): Promise<GameServer> {
-    const res = await this.get(`/game-server/${uuid}`);
-    return (await res.json()) as GameServer;
+    return this.send<GameServer>('GET', `/game-server/${uuid}`);
   }
 
   async createServer(input: CreateGameServerInput): Promise<GameServer> {
@@ -99,20 +96,19 @@ export class ApiClient {
         ? { docker_hardware_limits: { docker_memory_limit: input.memory_limit } }
         : {}),
     };
-    const res = await this.request('POST', '/game-server', body);
-    return (await res.json()) as GameServer;
+    return this.send<GameServer>('POST', '/game-server', body);
   }
 
   async deleteServer(uuid: string): Promise<void> {
-    await this.request('DELETE', `/game-server/${uuid}`);
+    await this.send<void>('DELETE', `/game-server/${uuid}`);
   }
 
   async startServer(uuid: string): Promise<void> {
-    await this.request('POST', `/game-server/${uuid}/start`);
+    await this.send<void>('POST', `/game-server/${uuid}/start`);
   }
 
   async stopServer(uuid: string): Promise<void> {
-    await this.request('POST', `/game-server/${uuid}/stop`);
+    await this.send<void>('POST', `/game-server/${uuid}/stop`);
   }
 
   async getStatus(uuid: string): Promise<GameServerStatus | undefined> {
@@ -162,15 +158,13 @@ export class ApiClient {
     return this.bearer ? { Authorization: `Bearer ${this.bearer}` } : {};
   }
 
-  private async get(pathname: string): Promise<Response> {
-    return this.request('GET', pathname);
-  }
-
-  private async request(
+  /** Fetch + unwrap the global response envelope in one step. */
+  private async send<T>(
     method: string,
     pathname: string,
     body?: unknown,
-  ): Promise<Response> {
+    context?: string,
+  ): Promise<T> {
     const res = await fetch(`${this.apiBase}${pathname}`, {
       method,
       headers: {
@@ -179,11 +173,42 @@ export class ApiClient {
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
-    if (!res.ok) {
-      throw new Error(`${method} ${pathname} → ${res.status} ${await safeText(res)}`);
-    }
-    return res;
+    return unwrap<T>(res, context ?? `${method} ${pathname}`);
   }
+}
+
+/**
+ * The backend wraps EVERY JSON response in a global envelope
+ * (`GlobalResponseWrapper`): `{ data, success, error, path, status_code, timestamp }`.
+ * This unwraps `data`, asserting `success === true`, and surfaces `error` (and the
+ * raw body) in the failure message. Void endpoints (start/stop/delete/logout) carry
+ * no `data`, so callers of those ignore the (undefined) result.
+ */
+interface ApiEnvelope<T> {
+  data?: T;
+  success?: boolean;
+  error?: string | null;
+  status_code?: number;
+  path?: string;
+}
+
+async function unwrap<T>(res: Response, context: string): Promise<T> {
+  const raw = await res.text();
+  let env: ApiEnvelope<T> | undefined;
+  try {
+    env = raw ? (JSON.parse(raw) as ApiEnvelope<T>) : undefined;
+  } catch {
+    // Non-JSON body — leave env undefined and let the checks below report it.
+  }
+
+  if (!res.ok) {
+    const detail = env?.error ?? raw ?? '<no body>';
+    throw new Error(`${context} → ${res.status} ${detail}`);
+  }
+  if (env && env.success === false) {
+    throw new Error(`${context} → API reported failure: ${env.error ?? '<no error message>'}`);
+  }
+  return env?.data as T;
 }
 
 /** Convenience: build a client, log in, return it. */
@@ -195,12 +220,4 @@ export async function loginApiClient(creds: AdminCredentials): Promise<ApiClient
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function safeText(res: Response): Promise<string> {
-  try {
-    return await res.text();
-  } catch {
-    return '<no body>';
-  }
 }

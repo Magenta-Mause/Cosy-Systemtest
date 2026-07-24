@@ -23,7 +23,8 @@ npx playwright test --list   # lists all specs even with no install present
 |---|---|---|
 | `COSY_BASE_URL` | Target Cosy URL (read only in `helpers/constants.ts`) | `http://localhost:8080` |
 | `INSTALL_LOG` | Tee'd installer stdout — admin creds source; **gates every spec** | — (specs skip if unset) |
-| `INSTALL_DIR` | Install dir; `.env` read from `${INSTALL_DIR}/config/.env` | `/opt/cosy` |
+| `INSTALL_DIR` | Install dir; `.env` fallback read from `${INSTALL_DIR}/config/.env` | `/opt/cosy` |
+| `INSTALL_ENV_FILE` | Runner-readable copy of the installed `.env` (preferred over `INSTALL_DIR`; CI copies it because the installed file is root-owned chmod 600) | — (falls back to `INSTALL_DIR`) |
 | `COSY_CHANNEL` | Channel label in `results/summary.json` | `release` |
 | `CI` | CI reporters + retries | — |
 

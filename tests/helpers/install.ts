@@ -90,14 +90,19 @@ export function parseCredentialsFromLog(logPath: string): AdminCredentials {
 
 /**
  * Read `ADMIN_USERNAME` / `ADMIN_PASSWORD` from the installer-written `.env`.
- * Path: `${INSTALL_DIR}/config/.env` (INSTALL_DIR default `/opt/cosy`).
+ *
+ * Prefers `INSTALL_ENV_FILE` when set — the installed `.env` is root-owned and
+ * chmod 600, so CI copies it to a runner-readable location rather than mutating
+ * the installed state under test. Falls back to `${INSTALL_DIR}/config/.env`
+ * (INSTALL_DIR default `/opt/cosy`) for local runs where the user can read it.
  */
 export function readCredentialsFromEnvFile(installDir = envInstallDir()): AdminCredentials {
-  const envPath = path.join(installDir, 'config', '.env');
+  const envPath = process.env.INSTALL_ENV_FILE ?? path.join(installDir, 'config', '.env');
   if (!fs.existsSync(envPath)) {
     throw new Error(
-      `.env not found at "${envPath}". Set INSTALL_DIR to the Cosy install ` +
-        `directory (default "${DEFAULT_INSTALL_DIR}").`,
+      `.env not found at "${envPath}". Set INSTALL_ENV_FILE to a runner-readable ` +
+        `copy, or INSTALL_DIR to the Cosy install directory (default ` +
+        `"${DEFAULT_INSTALL_DIR}"), where config/.env is readable.`,
     );
   }
 

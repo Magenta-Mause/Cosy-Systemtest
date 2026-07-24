@@ -60,7 +60,8 @@ listable and typecheckable on any machine.
 |---|---|---|
 | `COSY_BASE_URL` | Target Cosy URL | `http://localhost:8080` |
 | `INSTALL_LOG` | Path to the tee'd installer stdout (admin creds source; gates all specs) | — (specs skip if unset) |
-| `INSTALL_DIR` | Cosy install dir — `.env` is read from `${INSTALL_DIR}/config/.env` | `/opt/cosy` |
+| `INSTALL_DIR` | Cosy install dir — `.env` fallback is read from `${INSTALL_DIR}/config/.env` | `/opt/cosy` |
+| `INSTALL_ENV_FILE` | Runner-readable copy of the installed `.env`, preferred over `INSTALL_DIR` (the installed file is root-owned chmod 600, so CI copies it) | — (falls back to `INSTALL_DIR`) |
 | `COSY_CHANNEL` | Channel label written into `results/summary.json` | `release` |
 | `CI` | Enables CI reporters (github/html/json) + retries | — |
 

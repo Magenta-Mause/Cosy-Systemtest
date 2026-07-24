@@ -13,10 +13,12 @@ test.describe('@core install', () => {
   test('the stack reports healthy via actuator', async ({ request }) => {
     const res = await request.get(HEALTH_PATH);
     expect(res.ok(), `health endpoint ${HEALTH_PATH} should return 2xx`).toBeTruthy();
-    const body = (await res.json()) as { status?: string };
+    // The backend wraps every response in a global envelope, so the actuator
+    // payload sits under `.data` (`{ data: { status: "UP", ... }, success, ... }`).
+    const body = (await res.json()) as { data?: { status?: string } };
     // The workflow distinguishes degraded (some component DOWN) from OK; here we
     // assert the overall status is UP.
-    expect(body.status, 'overall actuator status').toBe('UP');
+    expect(body.data?.status, 'overall actuator status').toBe('UP');
   });
 
   test('the UI is reachable', async ({ page }) => {

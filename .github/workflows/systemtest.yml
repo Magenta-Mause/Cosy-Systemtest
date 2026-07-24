@@ -91,6 +91,15 @@ jobs:
           echo "Health status: ${status}"
           # Never fail here — install.spec is the source of truth for the install row.
 
+      # The installed .env is root-owned + chmod 600, unreadable by the `runner`
+      # user the suite runs as. Copy it to a runner-readable location instead of
+      # chmod'ing the installed file — we must not mutate the state under test.
+      # install.ts reads INSTALL_ENV_FILE in preference to ${INSTALL_DIR}/config/.env.
+      - name: Expose .env to the test runner
+        run: |
+          sudo install -m 0644 -o "$(id -un)" /opt/cosy/config/.env "$RUNNER_TEMP/cosy-install.env"
+          echo "INSTALL_ENV_FILE=$RUNNER_TEMP/cosy-install.env" >> "$GITHUB_ENV"
+
       # Metrics-are-truth: this step exits 0 even when features fail; it only fails
       # on an infrastructure error (Playwright produced no report).
       - name: Run systemtest suite
