@@ -173,9 +173,15 @@ export class AccessManagementPage {
     await expect(dialog).toBeHidden({ timeout: UI_FLOW_TIMEOUT_MS });
   }
 
-  /** Select the group tab by its name (ToggleGroupItem). */
+  /**
+   * Select the group tab by its name. Each group renders as a Radix
+   * `ToggleGroupItem` inside a `type="single"` `ToggleGroup` (AccessGroupList), and
+   * Radix gives single-select items `role="radio"` (with `aria-checked`) — NOT
+   * `role="button"` — so the old button locator never matched and hung to timeout.
+   * The item's accessible name is exactly the group name (its only text child).
+   */
   async selectGroup(name: string): Promise<void> {
-    await this.page.getByRole('button', { name, exact: true }).first().click();
+    await this.page.getByRole('radio', { name, exact: true }).first().click();
   }
 
   async addMember(username: string): Promise<void> {
@@ -189,10 +195,17 @@ export class AccessManagementPage {
   /**
    * Toggle the given permission tiles on. "See Server" must be granted before the
    * others become enabled, so pass it first.
+   *
+   * Each permission (PermissionsSection) is a `<div role="button">` wrapping a
+   * checkbox, a name span AND a description paragraph, so its accessible name is the
+   * name and description concatenated (e.g. "See Server View the server in the
+   * list. …"). An `exact: true` match on just the permission name therefore finds
+   * nothing; a substring (non-exact) match on the name is robust and disjoint
+   * between the permissions used here ("See Server" / "Read Server Logs").
    */
   async grantPermissions(permissionNames: string[]): Promise<void> {
     for (const name of permissionNames) {
-      await this.page.getByRole('button', { name, exact: true }).click();
+      await this.page.getByRole('button', { name }).click();
     }
   }
 
