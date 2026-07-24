@@ -128,11 +128,34 @@ export class UsersPage {
   }
 
   /**
+   * Type into a CONTROLLED React number input at human cadence and assert it stuck.
+   *
+   * Both quota fields (CpuLimitInput / MemoryLimitInput) hold their text in local
+   * component state (`localInputValue`) synced through an effect — the same fully
+   * controlled pattern as the create wizard. Playwright `fill()` dispatches a single
+   * synthetic `input` event, which does NOT reliably commit into that state: the
+   * binding snaps the DOM value back, the modal saves the unchanged value, and the
+   * persist re-read then waits forever (the run-15 120s timeout).
+   * `pressSequentially` fires a real event per keystroke, like a user.
+   */
+  private async typeNumber(input: Locator, value: string, what: string): Promise<void> {
+    await input.click();
+    await input.press('ControlOrMeta+a');
+    await input.press('Delete');
+    await input.pressSequentially(value, { delay: 60 });
+    await expect(input, `${what}: value did not persist in the controlled input`).toHaveValue(
+      value,
+      { timeout: UI_ACTION_TIMEOUT_MS },
+    );
+  }
+
+  /**
    * Set a quota-user's docker limits via the row menu → "Edit Resource Limits"
-   * (the released UpdateDockerLimitsModal). Values are the raw numeric strings for
-   * the CPU-cores input (`#docker-cpu-limit`) and the Memory input
-   * (`#docker-memory-limit`, a number field whose unit Select defaults to MiB — so a
-   * raw MiB value needs no unit change). Save button is "Save".
+   * (the released UpdateDockerLimitsModal). `cpu` is plain cores; `memoryMiB` is the
+   * NUMERIC part only — `#docker-memory-limit` is a compound number+unit widget
+   * (number input + a MiB/GiB Select that defaults to MiB, emitting `${n}${unit}`),
+   * exactly like the wizard's RAM field, so typing "512MiB" into it would be rejected.
+   * Save button is "Save".
    */
   async setQuota(username: string, opts: { cpu?: string; memoryMiB?: string }): Promise<void> {
     await this.openRowMenu(username);
@@ -143,10 +166,14 @@ export class UsersPage {
       timeout: UI_ACTION_TIMEOUT_MS,
     });
     if (opts.cpu !== undefined) {
-      await dialog.locator('#docker-cpu-limit').fill(opts.cpu);
+      await this.typeNumber(dialog.locator('#docker-cpu-limit'), opts.cpu, 'CPU limit');
     }
     if (opts.memoryMiB !== undefined) {
-      await dialog.locator('#docker-memory-limit').fill(opts.memoryMiB);
+      await this.typeNumber(
+        dialog.locator('#docker-memory-limit'),
+        opts.memoryMiB,
+        'memory limit',
+      );
     }
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(dialog).toBeHidden({ timeout: UI_FLOW_TIMEOUT_MS });
@@ -156,16 +183,23 @@ export class UsersPage {
    * Verify a quota user's CPU-cores limit persisted, by reopening the "Edit Resource
    * Limits" modal and reading the CPU input (the modal seeds it from the user's saved
    * `docker_max_cpu_cores`). Cancels without changes.
+   *
+   * Retries around a RELOAD: the modal seeds from the `users` redux slice, which is
+   * refreshed by a fetch that can lag the PATCH, so a straight reopen may still show
+   * the pre-save value. Reloading forces a fresh fetch each attempt.
    */
   async expectQuotaCpu(username: string, cpuCores: string): Promise<void> {
-    await this.openRowMenu(username);
-    await this.page.getByRole('menuitem', { name: 'Edit Resource Limits' }).click();
-    const dialog = this.dialog;
-    await expect(dialog.locator('#docker-cpu-limit')).toHaveValue(cpuCores, {
-      timeout: UI_FLOW_TIMEOUT_MS,
-    });
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await expect(dialog).toBeHidden({ timeout: UI_ACTION_TIMEOUT_MS });
+    await expect(async () => {
+      await this.page.reload();
+      await this.openRowMenu(username);
+      await this.page.getByRole('menuitem', { name: 'Edit Resource Limits' }).click();
+      const dialog = this.dialog;
+      await expect(dialog.locator('#docker-cpu-limit')).toHaveValue(cpuCores, {
+        timeout: UI_ACTION_TIMEOUT_MS,
+      });
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(dialog).toBeHidden({ timeout: UI_ACTION_TIMEOUT_MS });
+    }).toPass({ timeout: UI_FLOW_TIMEOUT_MS });
   }
 
   /** Delete a user via the row menu → "Delete User" confirmation. */
