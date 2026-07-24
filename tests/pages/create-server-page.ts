@@ -99,6 +99,29 @@ export class CreateServerPage {
     }
   }
 
+  /**
+   * Select a game so `external_game_id` becomes touched+valid (required to advance
+   * step 1). We pick the always-present generic fallback item ("Generic Game"):
+   *   - it is rendered client-side by `alwaysIncludeFallback`, so it works even if
+   *     the hosted games API is unreachable / returns nothing (robust + offline-safe);
+   *   - it selects no template, so step 3's Docker image stays empty and editable,
+   *     keeping a clean path to the custom `halftheopposite/tosios` image.
+   */
+  private async selectGenericGame(): Promise<void> {
+    const game = this.field('external_game_id');
+    await game.click(); // defaultOpen: focus/click opens the game popover
+    // The generic fallback option (i18n gameSelection.noResultsLabel = "Generic Game").
+    // TODO(testid): add data-testid="game-option-generic" to the fallback AutoComplete row
+    const generic = this.page.getByRole('option', { name: 'Generic Game' });
+    await expect(
+      generic,
+      'step 1: the generic-game fallback option never appeared in the game autocomplete',
+    ).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    await generic.click();
+    // After selection the game input shows the chosen label.
+    await expect(game).toHaveValue('Generic Game', { timeout: UI_ACTION_TIMEOUT_MS });
+  }
+
   /** Assert a wizard advance button is enabled (fail fast) and click it. */
   private async advance(label: string, step: string, exact = false): Promise<void> {
     const btn = this.dialog.getByRole('button', { name: label, exact });
@@ -127,8 +150,12 @@ export class CreateServerPage {
     /** Optional container path for a volume mount, e.g. "/data" — needed for file ops. */
     volumeMount?: string;
   }): Promise<void> {
-    // Step 1 "Choose name and Game": name the server (the game is optional).
+    // Step 1 "Choose name and Game": name the server AND pick a game. A game
+    // selection is REQUIRED to advance — the game field registers external_game_id
+    // in the page-validity gate and stays touched=false until an item is selected,
+    // so "Next Step" is disabled until then (naming alone never enables it).
     await this.typeInto(this.field('server_name'), opts.serverName, 'server name');
+    await this.selectGenericGame();
     await this.advance('Next Step', 'step 1 (name/game)');
 
     // Step 2 "Choose Template": a generic game has no templates → continue without one.

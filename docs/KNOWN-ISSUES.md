@@ -1,68 +1,71 @@
-# Known issues (released Cosy under test)
+# Known issues & release behaviours (Cosy under test)
 
-Issues in the **released** product that the systemtest surfaces. These are notes for
-whoever triages a red run, not test bugs to "fix" in this repo.
+Notes for whoever triages a red run: behaviours of the **released** product
+(frontend `5dba6e8`, installer v1.0.3) that shaped how the specs drive it, plus a
+rare crash the suite guards against. These are not test bugs to "fix" here.
 
-## create wizard: React #185 / blank page during the create flow (v1.0.3, frontend 5dba6e8)
+## create wizard — step 1 REQUIRES selecting a game (verified)
 
-**Symptom (CI):** in some runs, while `server-create` (and `files`, which provisions
-through the same wizard) types the server name, the app blanks to a white page with
-**React error #185** ("Maximum update depth exceeded" — an infinite render loop).
-`server-create` retry 2 also logged a **400 on `GET /api/auth/token`** ("Failed to
-refresh token") in the same trace.
+Filling only the server name does **not** enable "Next Step". Step 1 registers two
+fields in the page-validity gate — `server_name` **and** `external_game_id` (the game
+autocomplete) — and `GenericGameServerCreationPage` enables the advance button only
+when *every* registered attribute is both touched **and** valid.
 
-**How the suite reports it:** `create-server-page.ts` listens for React #185 /
-"maximum update depth" on the page. If the wizard blanks or that error fires during
-an interaction, the page object throws a clear, truthful error
-(`Released create wizard CRASHED …`) so the feature shows **RED** with the real cause
-instead of a misleading "value did not persist" or a silent timeout. We do **not**
-mask it.
+`AutoCompleteInputField/useAutoComplete.ts` sets
+`setAttributeTouched('external_game_id', gameServerState['external_game_id'] !== undefined)`,
+so until a game is **selected** the field is `touched=false` and the whole step stays
+invalid → "Next Step" is disabled forever.
 
-### Local reproduction attempts — could NOT reproduce a typing-caused crash
+The wizard's intended escape hatch: Step 1 passes `alwaysIncludeFallback` +
+`fallbackValue={GENERIC_GAME_PLACEHOLDER_VALUE}` + `defaultOpen`, so the game popover
+opens on focus and **always** contains a generic **"Generic Game"** fallback item
+(rendered client-side by `AutoCompleteItemList`, present even when the hosted games
+API is down or returns nothing). Selecting it sets `external_game_id` to the generic
+value → touched + valid (validator is `() => true`) → "Next Step" enables.
 
-Reproduced the released code at `5dba6e8` (worktree, React Compiler enabled) and drove
-it with Playwright, both no-delay and 60 ms/keystroke:
+**How the suite handles it:** `create-server-page.ts` selects the generic fallback
+after typing the name. It's chosen over a real game because it is offline-safe *and*
+selects no template, so step 3's Docker image stays empty/editable — a clean path to
+the custom `halftheopposite/tosios` image the spec creates.
 
-| Configuration | Typing | Result |
-|---|---|---|
-| Isolated real Step 1 field(s), **dev** build | fast + 60 ms | value persists, **no #185** |
-| Isolated real Step 1 field(s), **production** build (React Compiler prod output) | fast + 60 ms | value persists, **no #185** |
-| **Real app** create dialog (mocked auth, empty data) | fast | value persists, **no #185** |
-| **Real app** create dialog (mocked auth, populated games/templates) | fast + 60 ms | value persists, **no #185** |
+**Verified locally** (released app dialog, mocked auth, games API returning `[]`):
+Next Step is disabled after the name alone (`enabledAfterNameOnly=false`), the
+"Generic Game" fallback appears and is selectable with the games API empty, and after
+selecting it Next Step enables and advancing reaches step 2 — no crash.
 
-So typing into `server_name` — at machine OR human speed — does **not** deterministically
-crash the wizard in a clean environment. This rules out both "typing always crashes it"
-and "fast programmatic keystrokes flood a Step-1 loop".
+## Typing into controlled wizard inputs — use human-cadence keystrokes
 
-### Most likely cause: an auth-state flip mid-flow, not the typing
+Every wizard field is a fully controlled React input (`value={gameServerState[attr]}`).
+Playwright `fill()` (a single synthetic `input` event) does not reliably commit into
+that controlled state; the page objects use `pressSequentially(value, { delay: 60 })`
+(real per-keystroke events) and assert `toHaveValue` — verified locally to persist the
+value at both machine and human speed.
 
-The one CI-specific signal not present locally is the **`/api/auth/token` 400** during
-the flow. When identity-token refresh fails, `AuthProvider` calls `updateAuthState(null)`
-→ `authorized` becomes `false` → the entire authenticated subtree (including the open
-create dialog and its in-flight controlled inputs) unmounts while `loadPublicGameServer`
-runs. That teardown/re-render collision is a far more plausible trigger for #185 than the
-keystrokes, which merely coincide in time. (Auth refresh itself works — `auth.spec`
-exercises refresh-on-reload and passes — so this is likely a token-TTL / refresh-cookie
-timing edge, possibly specific to the long-running create flow.)
+## RARE: React #185 (blank page) during the create flow — heisenbug
 
-### Latent secondary risk in the wizard (real, but not reproduced as the trigger)
+One earlier CI run blanked to a white page with **React #185** ("maximum update depth
+exceeded") while in the create flow; the trace also showed a **400 on
+`GET /api/auth/token`**. It has **not** recurred and could **not** be reproduced
+locally in any faithful configuration (isolated Step-1 dev + production builds; the
+real app dialog with empty and with populated games/templates; machine- and
+human-speed typing) — typing never triggered it. Treat it as a rare heisenbug, most
+likely an **auth-token refresh flipping the session mid-flow**: a failed
+`/api/auth/token` makes `AuthProvider` set `authorized=false`, unmounting the open
+create dialog and its in-flight inputs — a plausible #185 trigger that merely
+coincides with typing. The primary create-flow blockers in CI were actually the
+`fill()` commit problem and the game-required gate above, both now handled.
 
-The wizard also has a genuine latent render-loop structure that could tip into #185 under
-enough render pressure:
+**Guard kept:** `create-server-page.ts` listens for React #185 / "maximum update
+depth" and, if the wizard blanks or that error fires during an interaction, fails
+RED with a clear `Released create wizard CRASHED …` message rather than a misleading
+timeout — so if the heisenbug reappears it is reported truthfully.
 
-- `useGameServerCreation.setCurrentPageValid` → `setPageValid(prev => ({ ...prev, [page]: v }))`
-  creates a **new `isPageValid` object every call, even when the boolean is unchanged**
-  (no bail-out).
-- Step 1 passes `validator={z.string().min(1)}` — a **fresh object every render**.
-- `GenericGameServerCreationInputField` and `useAutoComplete` both have effects that
-  `setAttributeTouched/Valid` unconditionally (new objects) keyed on `creationState.gameServerState`.
+### Latent wizard state-churn smell (real, not the observed trigger)
 
-Today this converges (the module-level `PAGES` element keeps Step 1 from re-rendering on
-`isPageValid` churn, so the field's `validator` dependency doesn't change). It is a smell
-worth fixing upstream — stabilise the validator (module constant), and make
-`setPageValid` / `setAttribute*` bail out when the value is unchanged.
-
-**Upstream fix suggestions (Cosy-Frontend):** stop the `/auth/token` refresh from tearing
-down the create dialog (guard the flow, or don't unmount on a transient refresh failure);
-independently, harden the wizard state churn above. Once fixed and released, the crash
-detection here simply stops firing.
+`useGameServerCreation.setCurrentPageValid` → `setPageValid(prev => ({ ...prev, [page]: v }))`
+allocates a **new object every call even when unchanged** (no bail-out); Step 1 passes
+`validator={z.string().min(1)}` (**fresh object per render**); the field + autocomplete
+effects `setAttribute*` unconditionally keyed on `creationState.gameServerState`. Today
+this converges (the module-level `PAGES` element keeps Step 1 from re-rendering on
+`isPageValid` churn). Worth hardening upstream: stabilise the validator (module
+constant) and bail out of `setPageValid` / `setAttribute*` when the value is unchanged.
