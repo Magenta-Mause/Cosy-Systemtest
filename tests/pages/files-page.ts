@@ -79,21 +79,36 @@ export class FilesPage {
   }
 
   async rename(name: string, newName: string): Promise<void> {
-    // Inline row action button, aria-label "Rename <name>".
-    await this.page.getByRole('button', { name: `Rename ${name}` }).click();
+    // The whole file row is itself a <button>, so its accessible name CONTAINS the
+    // child action button's aria-label ("… Rename <name> Delete <name>"). `exact:true`
+    // selects only the inline rename icon button (whose aria-label overrides its
+    // content, making its accessible name exactly "Rename <name>").
+    await this.rowActionButton('Rename', name).click();
     const dialog = this.page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
     await this.typeInto(dialog.getByRole('textbox'), newName, 'rename target name');
+    // Dialog is a separate subtree; scope to it + exact so the row's "Rename <name>"
+    // button can't collide with the dialog's "Rename" submit.
     await dialog.getByRole('button', { name: 'Rename', exact: true }).click();
     await expect(dialog).toBeHidden({ timeout: UI_ACTION_TIMEOUT_MS });
   }
 
   async deleteEntry(name: string): Promise<void> {
-    // Inline row action button, aria-label "Delete <name>".
-    await this.page.getByRole('button', { name: `Delete ${name}` }).click();
+    await this.rowActionButton('Delete', name).click();
     const dialog = this.page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
     await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
     await expect(dialog).toBeHidden({ timeout: UI_ACTION_TIMEOUT_MS });
+  }
+
+  /**
+   * The per-row inline action icon button (aria-labelled "<action> <name>"). These
+   * are width-gated (`@[500px]:flex`), not hover-gated, so they're clickable at the
+   * default viewport without hovering. `exact:true` disambiguates from the enclosing
+   * row button whose name merely contains this label.
+   */
+  private rowActionButton(action: 'Rename' | 'Delete', name: string): Locator {
+    // TODO(testid): add data-testid={`file-row-${action.toLowerCase()}-${name}`} to FileBrowserRow
+    return this.page.getByRole('button', { name: `${action} ${name}`, exact: true });
   }
 }
