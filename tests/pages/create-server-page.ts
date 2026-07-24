@@ -335,27 +335,49 @@ export class CreateServerPage {
   }
 
   /**
+   * Fill a step-2 template-variable input (id=placeholder) at human cadence, if the
+   * selected template exposes it. The variable inputs mount a render tick AFTER the
+   * template card is clicked (React commits the selection → TemplateVariableForm
+   * renders `#version` / `#memory` / …), so an instantaneous check races that render
+   * and skips the field. Skipping a REQUIRED variable is fatal: e.g. the PaperMC
+   * template's `version` has no default, so an unfilled `version` keeps
+   * `validateTemplateVariables` false and the step-2 advance ("Apply Template")
+   * permanently disabled. Wait for the input before concluding the template lacks it.
+   */
+  private async typeTemplateVariable(id: string, value: string): Promise<void> {
+    const input = this.field(id);
+    try {
+      await input.waitFor({ state: 'visible', timeout: UI_ACTION_TIMEOUT_MS });
+    } catch {
+      return; // this template genuinely has no such variable
+    }
+    await this.typeInto(input, value, `template variable ${id}`);
+  }
+
+  /**
    * Full "create from a hosted catalog template" flow (the server-from-template
    * feature), built on the corrected step primitives (typeInto / selectGame /
-   * advance + crash detector):
+   * typeTemplateVariable / advance + crash detector):
    *   Step 1 "Choose name and Game" — server name + the REAL game, "Next Step".
-   *   Step 2 "Choose Template"       — pick the catalog template, "Apply Template".
+   *   Step 2 "Choose Template"       — select the template, fill its required
+   *                                    variables, "Apply Template".
    *   Step 3 "Configure your Server" — image/memory PREFILLED by the template, so the
    *                                    step is already valid → "Create Server" → confirm.
    * Leaves the success dialog open (caller opens the server via {@link openCreatedServer}).
    *
-   * Uses the TOSIOS catalog template: it has NO template variables, so step 2 has
-   * nothing to fill and "Apply Template" enables as soon as the template is selected
-   * (validateTemplateVariables returns true for a variable-less template), and it is
-   * a tiny image that boots in seconds — no heavyweight world-gen. `expectImagePrefill`
-   * (optional) verifies the template populated step-3's docker image.
+   * The game MUST be a real SteamGridDB-backed catalog game (the step-1 autocomplete
+   * queries the games API, which is DISJOINT from the template service — a template
+   * whose game has no games-API presence is unreachable in the wizard). Minecraft is
+   * such a game and its image is already pulled by the `rcon` fixture (shared layers).
    */
   async createFromCatalogTemplate(opts: {
     serverName: string;
-    /** Step-1 game to select so its templates load in step 2 (e.g. /tosios/i). */
+    /** Step-1 game to select so its templates load in step 2 (e.g. /minecraft/i). */
     game: string | RegExp;
-    /** Step-2 template option to pick (e.g. /tosios/i). */
+    /** Step-2 template option to pick (e.g. /paper/i). */
     template: string | RegExp;
+    /** Required template-variable inputs to fill (id=placeholder → value). */
+    templateVariables?: Record<string, string>;
     /** Optional: assert step-3's docker image was prefilled from the template. */
     expectImagePrefill?: string | RegExp;
   }): Promise<void> {
@@ -365,14 +387,17 @@ export class CreateServerPage {
     await this.selectGame(opts.game);
     await this.advance('Next Step', 'step 1 (name/game)');
 
-    // Step 2 — pick the catalog template. Once a template is selected the advance
-    // button reads "Apply Template" (vs "Continue without Template"); it enables
-    // immediately for a variable-less template like TOSIOS.
+    // Step 2 — pick the catalog template, then fill its required variables. Once a
+    // template is selected the advance reads "Apply Template" (vs "Continue without
+    // Template") and only enables when validateTemplateVariables passes.
     await expect(
       this.templateList.getByRole('option').first(),
       'step 2: no templates loaded for the selected game (hosted template API?)',
     ).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
     await this.templateList.getByRole('option', { name: opts.template }).first().click();
+    for (const [id, value] of Object.entries(opts.templateVariables ?? {})) {
+      await this.typeTemplateVariable(id, value);
+    }
     await this.advance(/Apply Template|Next Step|Continue/, 'step 2 (template)');
 
     // Step 3 — the template applied its docker image + memory into the form state, so
