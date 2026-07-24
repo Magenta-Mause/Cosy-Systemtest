@@ -43,7 +43,8 @@ export class FilesPage {
     await locator.click();
     await locator.press('ControlOrMeta+a');
     await locator.press('Delete');
-    await locator.pressSequentially(value);
+    // Human-cadence keystrokes (see create-server-page.ts) — realistic and safe.
+    await locator.pressSequentially(value, { delay: 60 });
     await expect(
       locator,
       `${what}: value "${value}" did not persist in the controlled dialog input.`,

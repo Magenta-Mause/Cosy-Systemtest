@@ -9,6 +9,12 @@ import { TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from '@helpers/constants';
  * In the released frontend (5dba6e8) a freshly created server is STOPPED ("ready
  * to be started"), so after the wizard we start it through the UI and assert the
  * live status reaches RUNNING — the full "user creates and runs a server" path.
+ *
+ * If the released create wizard blanks out with React #185 during input, the
+ * CreateServerPage page object detects it and fails RED with a clear message
+ * rather than a misleading timeout — see docs/KNOWN-ISSUES.md for the full
+ * investigation (the crash was not reproducible from typing alone; the likely
+ * trigger is an /api/auth/token refresh flipping the session mid-flow).
  */
 test.describe('@core server-create', () => {
   runsOnlyWithInstall();

@@ -26,8 +26,31 @@ import { SERVER_START_TIMEOUT_MS, UI_ACTION_TIMEOUT_MS } from '@helpers/constant
  * the optional volume-mount row is matched by its `/data` placeholder. No
  * `data-testid`s exist in this release — see docs/testid-gaps.md.
  */
+// Type at a human cadence, not machine speed: verified locally (released frontend
+// 5dba6e8, dev + prod builds, real dialog with/without data) that both fast and
+// 60ms-delayed keystrokes persist the controlled-input value without crashing.
+// A user-like delay is the realistic write and costs a fraction of a second.
+const KEYSTROKE_DELAY_MS = 60;
+
 export class CreateServerPage {
-  constructor(private readonly page: Page) {}
+  /** Set if a React "maximum update depth"/#185 error is observed on the page. */
+  private reactCrash: string | null = null;
+
+  constructor(private readonly page: Page) {
+    // The released create wizard has been seen to blank out with React #185
+    // (maximum update depth) during the create flow in CI. Capture it so a crash
+    // surfaces as a clear, truthful failure instead of a misleading "value did not
+    // persist" (the input vanishes when the app unmounts). See docs/KNOWN-ISSUES.md.
+    const record = (text: string) => {
+      if (/Maximum update depth|Minified React error #185|error #185|#185/i.test(text)) {
+        this.reactCrash ??= text;
+      }
+    };
+    page.on('pageerror', (e) => record(e.message));
+    page.on('console', (m) => {
+      if (m.type() === 'error') record(m.text());
+    });
+  }
 
   private get dialog(): Locator {
     return this.page.getByRole('dialog');
@@ -38,27 +61,57 @@ export class CreateServerPage {
     return this.dialog.locator(`#${id}`);
   }
 
-  /** Enter text into a controlled input via real keystrokes and assert it stuck. */
+  /**
+   * If the wizard crashed (React #185) or the app blanked out during an
+   * interaction, throw a clear, truthful error naming the real symptom. Returns
+   * normally when no crash is detected (so the caller rethrows its own diagnostic).
+   */
+  private async throwIfCrashed(during: string): Promise<void> {
+    const dialogGone = (await this.dialog.count()) === 0;
+    const rootLen = (await this.page.locator('#root').innerHTML().catch(() => '')).length;
+    const blanked = dialogGone && rootLen < 200;
+    if (this.reactCrash || blanked) {
+      throw new Error(
+        `Released create wizard CRASHED while ${during}: the app unmounted ` +
+          `(${this.reactCrash ? `React "${this.reactCrash.split('\n')[0]}"` : 'page blanked out'}). ` +
+          `This is a released Cosy v1.0.3 defect surfaced by the systemtest — the create ` +
+          `feature is genuinely broken in that run. See docs/KNOWN-ISSUES.md.`,
+      );
+    }
+  }
+
+  /** Enter text into a controlled input via real (human-cadence) keystrokes and assert it stuck. */
   private async typeInto(locator: Locator, value: string, what: string): Promise<void> {
     await locator.click();
     await locator.press('ControlOrMeta+a');
     await locator.press('Delete');
-    await locator.pressSequentially(value);
-    await expect(
-      locator,
-      `${what}: value "${value}" did not persist — the controlled React input never ` +
-        `committed to gameServerState (a fill()-style single-event write was reverted).`,
-    ).toHaveValue(value, { timeout: UI_ACTION_TIMEOUT_MS });
+    await locator.pressSequentially(value, { delay: KEYSTROKE_DELAY_MS });
+    try {
+      await expect(locator).toHaveValue(value, { timeout: UI_ACTION_TIMEOUT_MS });
+    } catch (e) {
+      await this.throwIfCrashed(`typing the ${what}`);
+      // Not a crash — the controlled input genuinely failed to commit.
+      throw new Error(
+        `${what}: value "${value}" did not persist — the controlled React input never ` +
+          `committed to gameServerState (a fill()-style single-event write was reverted).`,
+        { cause: e },
+      );
+    }
   }
 
   /** Assert a wizard advance button is enabled (fail fast) and click it. */
   private async advance(label: string, step: string, exact = false): Promise<void> {
     const btn = this.dialog.getByRole('button', { name: label, exact });
-    await expect(
-      btn,
-      `${step}: "${label}" never became enabled — wizard step validation was not ` +
-        `satisfied (a required controlled input did not register as touched+valid).`,
-    ).toBeEnabled({ timeout: UI_ACTION_TIMEOUT_MS });
+    try {
+      await expect(btn).toBeEnabled({ timeout: UI_ACTION_TIMEOUT_MS });
+    } catch (e) {
+      await this.throwIfCrashed(`advancing past ${step}`);
+      throw new Error(
+        `${step}: "${label}" never became enabled — wizard step validation was not ` +
+          `satisfied (a required controlled input did not register as touched+valid).`,
+        { cause: e },
+      );
+    }
     await btn.click();
   }
 
