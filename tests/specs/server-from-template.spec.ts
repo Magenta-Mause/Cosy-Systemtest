@@ -43,7 +43,7 @@ test.describe('@extended server-from-template', () => {
       await test.step('When: creating a server from the Minecraft PaperMC catalog template', async () => {
         await create.createFromCatalogTemplate({
           serverName,
-          game: /minecraft/i,
+          game: 'minecraft',
           template: /paper/i,
           templateVariables: { version: '1.21.5', memory: '2' },
           // The template's docker image is prefilled into step 3 (itzg/minecraft-server).

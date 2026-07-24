@@ -188,6 +188,26 @@ export class CreateServerPage {
     });
   }
 
+  /**
+   * Select a game resiliently against the flaky hosted games API (cosy-game-api /
+   * SteamGridDB): the first popover query can return empty / be slow / be
+   * rate-limited, so re-type the query and retry the whole selection (open → option
+   * visible → click → value committed) within a generous budget. Used by the
+   * template flow, whose game choice MUST succeed for step 2 to load templates.
+   */
+  async selectGameResilient(name: string): Promise<void> {
+    const re = new RegExp(name, 'i');
+    await expect(async () => {
+      await this.searchGames(name); // re-type to (re)trigger the hosted search
+      const option = this.gameOption(re).first();
+      await expect(option).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+      await option.click();
+      await expect(this.field('external_game_id')).toHaveValue(re, {
+        timeout: UI_ACTION_TIMEOUT_MS,
+      });
+    }).toPass({ timeout: UI_FLOW_TIMEOUT_MS });
+  }
+
   /** Assert a wizard advance button is enabled (fail fast) and click it. */
   private async advance(label: string | RegExp, step: string, exact = false): Promise<void> {
     const btn = this.dialog.getByRole('button', { name: label, exact });
@@ -389,8 +409,8 @@ export class CreateServerPage {
    */
   async createFromCatalogTemplate(opts: {
     serverName: string;
-    /** Step-1 game to select so its templates load in step 2 (e.g. /minecraft/i). */
-    game: string | RegExp;
+    /** Step-1 game name to select so its templates load in step 2 (e.g. "minecraft"). */
+    game: string;
     /** Step-2 template option to pick (e.g. /paper/i). */
     template: string | RegExp;
     /** Required template-variable inputs to fill (id=placeholder → value). */
@@ -399,9 +419,10 @@ export class CreateServerPage {
     expectImagePrefill?: string | RegExp;
   }): Promise<void> {
     // Step 1 — name the server AND select the real game so its templates load in
-    // step 2. Selecting the game is REQUIRED to advance.
+    // step 2. Selecting the game is REQUIRED to advance; select it resiliently since
+    // the hosted games API can be slow/empty on the first query.
     await this.typeInto(this.field('server_name'), opts.serverName, 'server name');
-    await this.selectGame(opts.game);
+    await this.selectGameResilient(opts.game);
     await this.advance('Next Step', 'step 1 (name/game)');
 
     // Step 2 — pick the catalog template, then fill its required variables. Once a
