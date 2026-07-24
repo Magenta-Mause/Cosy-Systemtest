@@ -1,3 +1,8 @@
+
+
+> **Status 2026-07-24:** all ids below were implemented in [Cosy-Frontend PR #118](https://github.com/Magenta-Mause/Cosy-Frontend/pull/118)
+> (three renames noted inline). Page objects stay on role/label selectors until a release
+> ships the ids; then switch to `getByTestId` and clear this list.
 # `data-testid` gaps
 
 The Cosy frontend currently ships **zero `data-testid` attributes** (verified:
@@ -27,7 +32,7 @@ object uses today.
 | Suggested `data-testid` | Frontend file | Current selector |
 |---|---|---|
 | `create-server-plot` | `src/components/display/GameServer/ConstructionPlace/ConstructionPlaceHouse.tsx` | `getByRole('link', { name: 'Create a new Game Server Configuration' })` |
-| `server-house-{uuid}` | `src/components/display/GameServer/GameServerHouseAligner/…` (server house link) | `getByRole('link', { name: /Game Server Configuration: {name}/ })` — the suite prefers URL navigation (`/server/{uuid}`) instead |
+| `server-house` (static; filter by content — was proposed as `server-house-{uuid}`) | `src/components/display/GameServer/GameServerHouseAligner/…` (server house link) | `getByRole('link', { name: /Game Server Configuration: {name}/ })` — the suite prefers URL navigation (`/server/{uuid}`) instead |
 
 ## Create-server wizard
 
@@ -47,7 +52,7 @@ object uses today.
 |---|---|---|
 | `server-start-stop-btn` | `src/components/display/GameServer/GameServerStartStopButton/GameServerStartStopButton.tsx` | `getByRole('button', { name: 'Start' \| 'Shutdown' })` |
 | `server-status-indicator` | `src/components/display/GameServer/GameServerStatusIndicator/GameServerStatusIndicator.tsx` | `getByText('Running' \| 'Stopped' \| …)` |
-| `server-tab-{label}` | `src/components/display/GameServer/GameServerDetailPageLayout/FancyNavigationButton.tsx` (used from `GameServerDetailPageLayout.tsx`) | none — tab labels are visually hidden until hover, so the suite navigates by URL (`/server/{uuid}/console`, `/files`, `/settings/general`) |
+| `server-tab-{key}` — keys are the internal tab keys (`overview`, `console`, `metrics`, `file_explorer`, `settings`), NOT the route names | `src/components/display/GameServer/GameServerDetailPageLayout/FancyNavigationButton.tsx` (used from `GameServerDetailPageLayout.tsx`) | none — tab labels are visually hidden until hover, so the suite navigates by URL (`/server/{uuid}/console`, `/files`, `/settings/general`) |
 | `server-delete-btn` | `src/components/display/GameServer/EditGameServer/UncosyZone.tsx` | `getByRole('button', { name: 'Delete' })` |
 | `delete-confirm-input` | `src/components/display/GameServer/DeleteGameServerAlertDialog/DeleteGameServerAlertDialog.tsx` | `dialog.locator('#serverName')` (existing id) |
 | `delete-confirm-btn` | same | `dialog.getByRole('button', { name: 'Delete' })` |
@@ -65,7 +70,7 @@ object uses today.
 | Suggested `data-testid` | Frontend file | Current selector |
 |---|---|---|
 | `files-new-folder-btn` | `src/components/display/GameServer/FileBrowser/FileBrowserHeader/FileBrowserHeader.tsx` | `getByRole('button', { name: 'New Directory' })` |
-| `file-row-{name}` | `src/components/display/GameServer/FileBrowser/FileBrowserRow/FileBrowserRow.tsx` | `locator('div[role="button"]').filter({ hasText: name })` |
+| `file-row` (static; filter by content — was proposed as `file-row-{name}`) | `src/components/display/GameServer/FileBrowser/FileBrowserRow/FileBrowserRow.tsx` | `locator('div[role="button"]').filter({ hasText: name })` |
 | `file-row-menu-btn` | same | `row.getByRole('button')` (the single ⋯ trigger in the row) |
 | `mkdir-name-input` / `mkdir-submit-btn` | `src/components/display/GameServer/FileBrowser/dialogs/MkdirDialog.tsx` | `dialog.getByRole('textbox')` / `getByRole('button', { name: 'Create' })` |
 | `rename-name-input` / `rename-submit-btn` | `src/components/display/GameServer/FileBrowser/dialogs/RenameDialog.tsx` | `dialog.getByRole('textbox')` / `getByRole('button', { name: 'Rename' })` |
