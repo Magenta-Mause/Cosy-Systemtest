@@ -25,10 +25,14 @@ test.describe('@extended public-dashboard', () => {
     sharedServer,
     browser,
   }) => {
+    // NO client-supplied `uuid`: PublicDashboardLayout's id is a JPA
+    // @GeneratedValue @Id, and the released frontend sends new widgets WITHOUT a
+    // uuid (it lets the backend generate it). Supplying one makes Hibernate treat
+    // the layout as a detached entity and the PATCH 500s. See docs/KNOWN-ISSUES.md.
     const layouts = [
-      { uuid: crypto.randomUUID(), size: 'MEDIUM', layout_type: 'METRIC', metric_type: 'CPU_PERCENT', title: 'CPU' },
-      { uuid: crypto.randomUUID(), size: 'MEDIUM', layout_type: 'METRIC', metric_type: 'MEMORY_PERCENT', title: 'Memory' },
-      { uuid: crypto.randomUUID(), size: 'LARGE', layout_type: 'LOGS', title: 'Logs' },
+      { size: 'MEDIUM', layout_type: 'METRIC', metric_type: 'CPU_PERCENT', title: 'CPU' },
+      { size: 'MEDIUM', layout_type: 'METRIC', metric_type: 'MEMORY_PERCENT', title: 'Memory' },
+      { size: 'LARGE', layout_type: 'LOGS', title: 'Logs' },
     ];
 
     try {
