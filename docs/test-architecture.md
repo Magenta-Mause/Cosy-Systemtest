@@ -40,6 +40,19 @@ Rules that keep the layers clean:
 - `COSY_BASE_URL` is read **only** in `helpers/constants.ts` (`resolveBaseURL()`).
 - Every timeout is a named constant in `helpers/constants.ts` — generous by design.
 
+## Page objects track the RELEASED frontend, not `main`
+
+The release channel installs the frontend *image pinned by the installer*, not
+`main` — currently **`sha-5dba6e8`** (installer v1.0.3). The deployed UI differs from
+`main` (e.g. the released create-server wizard uses a "Next Step" button and a game
+search on step 1, and the released file browser only allows writes inside a declared
+volume mount). **Derive selectors from the released revision**, e.g.
+`git show 5dba6e8:<path>` / `git ls-tree -r 5dba6e8 --name-only` in `Cosy-frontend` —
+not from `HEAD`. When a new Cosy release ships, re-derive the affected page objects
+against the new pinned revision. Once a release includes `data-testid`s (they are
+merged on `main` via Cosy-Frontend PR #118), switch the page objects to
+`getByTestId` and drop the corresponding `// TODO(testid)` rows.
+
 ## The install/teardown flow (owned by the workflow, not Playwright)
 
 The workflow — not a spec — installs and uninstalls Cosy:

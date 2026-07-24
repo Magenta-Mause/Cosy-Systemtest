@@ -4,7 +4,11 @@ import { TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from '@helpers/constants';
 
 /**
  * Feature: server-create — create a server with a custom image through the UI
- * creation wizard and watch it reach RUNNING.
+ * creation wizard and get it to RUNNING.
+ *
+ * In the released frontend (5dba6e8) a freshly created server is STOPPED ("ready
+ * to be started"), so after the wizard we start it through the UI and assert the
+ * live status reaches RUNNING — the full "user creates and runs a server" path.
  */
 test.describe('@core server-create', () => {
   runsOnlyWithInstall();
@@ -44,8 +48,13 @@ test.describe('@core server-create', () => {
         return id!;
       });
 
-      await test.step('Then: the server reaches RUNNING', async () => {
+      await test.step('When: starting it via the UI, Then: it reaches RUNNING', async () => {
         const detail = new ServerDetailPage(page, uuid);
+        // Created servers start out STOPPED in this release; start unless the
+        // backend already brought it up.
+        if ((await apiClient.getStatus(uuid)) !== 'RUNNING') {
+          await detail.start();
+        }
         await detail.expectStatus('RUNNING');
       });
     } finally {
