@@ -346,12 +346,25 @@ export class CreateServerPage {
     });
   }
 
-  /** Fill a step-2 template-variable input (id=placeholder) at human cadence, only if present. */
+  /**
+   * Fill a step-2 template-variable input (id=placeholder) at human cadence, if the
+   * selected template exposes it. The variable inputs mount a render tick AFTER the
+   * template card is clicked (React commits the selection → TemplateVariableForm
+   * renders `#version` / `#memory` / …), so an instantaneous `isVisible()` check
+   * races that render and skips the field. Skipping a REQUIRED variable is fatal:
+   * PaperMC's `version` has no default, so an unfilled `version` keeps
+   * `validateTemplateVariables` false and the step-2 advance button ("Apply
+   * Template") permanently disabled. Wait briefly for the input before concluding
+   * the template has no such variable.
+   */
   private async typeIfPresent(id: string, value: string, what: string): Promise<void> {
     const input = this.field(id);
-    if (await input.isVisible().catch(() => false)) {
-      await this.typeInto(input, value, what);
+    try {
+      await input.waitFor({ state: 'visible', timeout: UI_ACTION_TIMEOUT_MS });
+    } catch {
+      return; // this template genuinely has no such variable
     }
+    await this.typeInto(input, value, what);
   }
 
   /**
