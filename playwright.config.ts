@@ -28,7 +28,10 @@ export default defineConfig({
     // Trace always: a nightly failure must be fully debuggable from the artifact
     // alone (no local repro on a throwaway runner).
     trace: 'on',
-    video: 'retain-on-failure',
+    // Record every run, not just failures: this is a monitoring suite, so we want
+    // to be able to watch a green nightly too (confirm the UI actually did the
+    // right thing), not only debug red ones.
+    video: 'on',
     screenshot: 'only-on-failure',
   },
 

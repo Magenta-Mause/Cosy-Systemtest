@@ -72,7 +72,7 @@ sequenceDiagram
     PW-->>RN: JSON report
     RN->>RN: parse → results/summary.json (feature × status × duration)
     WF->>WF: uninstall_cosy.sh docker -y + assert clean → append `uninstall` row
-    WF->>WF: upload playwright-report + results (always), traces/videos (on failure)
+    WF->>WF: upload playwright-report + results (always), traces/videos (always — video:'on')
 ```
 
 `uninstall` is asserted by the workflow (no leftover `cosy-*` containers, install

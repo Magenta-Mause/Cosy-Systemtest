@@ -177,11 +177,14 @@ jobs:
       # Always upload traces/videos: the runner exits 0 on red features by design
       # ("metrics are truth"), so the job stays green and `failure()` would never
       # fire exactly when specs go red — the case we most need traces for. With
-      # trace:'on' a trace exists for every run regardless, so this is safe.
+      # trace:'on' + video:'on' a trace AND a watchable video.webm exist for every
+      # run (green or red) under test-results/<test-dir>/, so this always contains
+      # both — hence the artifact name. Watch a video by downloading it, or open
+      # the HTML report (systemtest-report) which links each test to its video.
       - name: Upload traces and videos
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: systemtest-traces
+          name: systemtest-report-traces-videos
           path: test-results/
           retention-days: 14
