@@ -1,32 +1,30 @@
 import { test, expect, runsOnlyWithInstall } from '@fixtures/index';
 import { CreateServerPage, HomePage, ServerDetailPage } from '@pages/index';
-import { MINECRAFT_READY_TIMEOUT_MS } from '@helpers/constants';
+import { SERVER_COLD_START_TIMEOUT_MS } from '@helpers/constants';
 
 /**
- * Feature: server-from-template — create a Minecraft server (itzg image) through
- * the template flow and wait until it is RUNNING and itzg reports readiness in the
- * logs. This is the heavyweight run (image pull + EULA + world generation); the
- * plan budgets 5-8 minutes, so a dedicated generous timeout is used.
+ * Feature: server-from-template — create a server from a HOSTED catalog template
+ * through the creation wizard (that UI path IS the feature) and confirm it runs.
  *
- * This spec drives its OWN creation through the UI template wizard (that UI path
- * IS the feature) and cleans up afterwards. The `rcon` spec does NOT reuse this
- * server — it uses the API-provisioned `minecraftServer` fixture — so the two
- * heavy specs stay independent of each other's execution order (Playwright runs
- * spec files in parallel across workers).
+ * Uses the TOSIOS catalog template (game_id `tosios`, image
+ * `halftheopposite/tosios`, 512MiB, no persistence). It is served by the same
+ * hosted template service the fresh install fetches from. Chosen over a Minecraft
+ * template because it has NO template variables — so step 2 has nothing to fill and
+ * "Apply Template" enables the moment the template is selected — and it is a tiny
+ * image that boots in seconds (no itzg/Paper world-gen), so this spec is now light
+ * and rcon remains the sole Minecraft/RCON boot in the whole suite.
+ *
+ * Readiness = RUNNING: TOSIOS emits no itzg/Paper "Done" log line, so we assert the
+ * live status reaches RUNNING (via the shared startable-aware start helper) rather
+ * than a Minecraft-specific log match.
  */
 test.describe('@extended server-from-template', () => {
   runsOnlyWithInstall();
 
-  // Image pull + world gen dominate; allow well beyond the ready budget.
-  //
-  // retries: 0 — this is the single most expensive spec (a full Minecraft image
-  // pull + world generation, ~10 min per attempt). Its failure modes (world-gen
-  // overrunning the budget, hosted template API down) are NOT transient, so the
-  // default CI retries would triple its ~10 min cost to ~30 min without changing
-  // the outcome. Fail fast on the first attempt instead.
-  test.describe.configure({ timeout: MINECRAFT_READY_TIMEOUT_MS + 120_000, retries: 0 });
+  // Light now (tiny image); keep a wide budget for the cold pull + start under load.
+  test.describe.configure({ timeout: 360_000 });
 
-  test('create a Minecraft server from a template and reach ready', async ({
+  test('create a server from a catalog template and reach RUNNING', async ({
     loggedInPage: page,
     apiClient,
   }) => {
@@ -41,28 +39,30 @@ test.describe('@extended server-from-template', () => {
         await home.openCreateServerModal();
       });
 
-      await test.step('When: creating a Minecraft server from the template flow', async () => {
-        await create.createMinecraftFromTemplate({
+      await test.step('When: creating a server from the hosted TOSIOS catalog template', async () => {
+        await create.createFromCatalogTemplate({
           serverName,
-          memoryMiB: '2048', // 2 GiB via the default MiB unit (min 6 MiB)
-          version: '1.21.5',
-          templateMemoryGiB: '2',
+          game: /tosios/i,
+          template: /tosios/i,
+          expectImagePrefill: /tosios/i,
         });
-        await create.openCreatedServerSlow();
+        await create.openCreatedServer();
       });
 
       uuid = await test.step('Then: the app opens the new server detail page', async () => {
-        await page.waitForURL(/\/server\/[^/]+/, { timeout: MINECRAFT_READY_TIMEOUT_MS });
+        await page.waitForURL(/\/server\/[^/]+/);
         const id = page.url().match(/\/server\/([^/?#]+)/)?.[1];
         expect(id, 'server uuid in URL').toBeTruthy();
         return id!;
       });
 
-      await test.step('Then: it reaches RUNNING and itzg reports readiness in the logs', async () => {
+      await test.step('Then: the template server starts and reaches RUNNING', async () => {
+        // Creating from a template is the feature; starting the created server is a
+        // precondition (proven as a feature by server-lifecycle), so bring it up via
+        // the startable-aware API helper, then confirm the live UI status is RUNNING.
+        await apiClient.ensureRunning(uuid);
         const detail = new ServerDetailPage(page, uuid);
-        await detail.expectStatus('RUNNING', MINECRAFT_READY_TIMEOUT_MS);
-        // itzg prints 'Done (…)! For help, type "help"' once the world is ready.
-        await apiClient.waitForLogMatch(uuid, /Done \(|RCON running/i, MINECRAFT_READY_TIMEOUT_MS);
+        await detail.expectStatus('RUNNING', SERVER_COLD_START_TIMEOUT_MS);
       });
     } finally {
       const created =

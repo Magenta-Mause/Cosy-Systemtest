@@ -20,7 +20,13 @@ import {
 test.describe('@extended rcon', () => {
   runsOnlyWithInstall();
 
-  test.describe.configure({ timeout: 180_000 });
+  // The `minecraftServer` fixture boots a cold PaperMC server (image pull + world
+  // gen), and that setup counts against this test's timeout, so the budget must fit
+  // a full cold Minecraft boot. No cross-spec serialization is needed: rcon is now
+  // the SUITE'S ONLY Minecraft boot — server-from-template switched to the tiny
+  // TOSIOS catalog template — so there is no second concurrent PaperMC pull to
+  // starve it on the 4-vCPU runner (the run-11/12 contention root cause).
+  test.describe.configure({ timeout: 720_000 });
 
   test('enable RCON and send a command, then see the response', async ({
     loggedInPage: page,

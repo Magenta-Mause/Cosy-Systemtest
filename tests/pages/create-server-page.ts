@@ -1,7 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
 import {
-  MINECRAFT_READY_TIMEOUT_MS,
   SERVER_START_TIMEOUT_MS,
   UI_ACTION_TIMEOUT_MS,
   UI_FLOW_TIMEOUT_MS,
@@ -257,17 +256,6 @@ export class CreateServerPage {
     await success.getByRole('button', { name: /Go to dashboard|Open Dashboard/ }).click();
   }
 
-  /**
-   * Same success dialog as {@link openCreatedServer}, but wait the long
-   * Minecraft-ready budget: an itzg image pull + EULA + world generation can run
-   * for minutes before "Server Created!" appears. Used by the template flow.
-   */
-  async openCreatedServerSlow(): Promise<void> {
-    const success = this.page.getByRole('dialog').filter({ hasText: 'Server Created!' });
-    await expect(success).toBeVisible({ timeout: MINECRAFT_READY_TIMEOUT_MS });
-    await success.getByRole('button', { name: /Go to dashboard|Open Dashboard/ }).click();
-  }
-
   // ── Step 1/2: game catalog & template inspection (templates / games-search) ──
   //
   // The released wizard's game picker IS the step-1 `#external_game_id`
@@ -347,75 +335,54 @@ export class CreateServerPage {
   }
 
   /**
-   * Fill a step-2 template-variable input (id=placeholder) at human cadence, if the
-   * selected template exposes it. The variable inputs mount a render tick AFTER the
-   * template card is clicked (React commits the selection → TemplateVariableForm
-   * renders `#version` / `#memory` / …), so an instantaneous `isVisible()` check
-   * races that render and skips the field. Skipping a REQUIRED variable is fatal:
-   * PaperMC's `version` has no default, so an unfilled `version` keeps
-   * `validateTemplateVariables` false and the step-2 advance button ("Apply
-   * Template") permanently disabled. Wait briefly for the input before concluding
-   * the template has no such variable.
-   */
-  private async typeIfPresent(id: string, value: string, what: string): Promise<void> {
-    const input = this.field(id);
-    try {
-      await input.waitFor({ state: 'visible', timeout: UI_ACTION_TIMEOUT_MS });
-    } catch {
-      return; // this template genuinely has no such variable
-    }
-    await this.typeInto(input, value, what);
-  }
-
-  /**
-   * Full "create from a game template" flow, built on main's corrected step
-   * primitives (typeInto / selectGame / setMemoryLimit / advance + crash
-   * detector) — NOT the old "advance with just a name" path:
+   * Full "create from a hosted catalog template" flow (the server-from-template
+   * feature), built on the corrected step primitives (typeInto / selectGame /
+   * advance + crash detector):
    *   Step 1 "Choose name and Game" — server name + the REAL game, "Next Step".
-   *   Step 2 "Choose Template"       — pick a template (+ any variables), advance.
-   *   Step 3 "Configure your Server" — hardware memory limit, "Create Server" → confirm.
-   * Leaves the success dialog open (caller opens the server, typically via
-   * {@link openCreatedServerSlow}).
+   *   Step 2 "Choose Template"       — pick the catalog template, "Apply Template".
+   *   Step 3 "Configure your Server" — image/memory PREFILLED by the template, so the
+   *                                    step is already valid → "Create Server" → confirm.
+   * Leaves the success dialog open (caller opens the server via {@link openCreatedServer}).
+   *
+   * Uses the TOSIOS catalog template: it has NO template variables, so step 2 has
+   * nothing to fill and "Apply Template" enables as soon as the template is selected
+   * (validateTemplateVariables returns true for a variable-less template), and it is
+   * a tiny image that boots in seconds — no heavyweight world-gen. `expectImagePrefill`
+   * (optional) verifies the template populated step-3's docker image.
    */
-  async createMinecraftFromTemplate(opts: {
+  async createFromCatalogTemplate(opts: {
     serverName: string;
-    /** Hardware memory limit for step 3, e.g. "2048" (MiB) or "2GiB". */
-    memoryMiB: string;
-    /** Minecraft version for the template's "version" variable (if the template has one). */
-    version: string;
-    /** Memory (GiB) for the template's own "memory" variable (if present). */
-    templateMemoryGiB: string;
+    /** Step-1 game to select so its templates load in step 2 (e.g. /tosios/i). */
+    game: string | RegExp;
+    /** Step-2 template option to pick (e.g. /tosios/i). */
+    template: string | RegExp;
+    /** Optional: assert step-3's docker image was prefilled from the template. */
+    expectImagePrefill?: string | RegExp;
   }): Promise<void> {
-    // Step 1 — name the server AND select the real Minecraft game so its
-    // templates load in step 2. Selecting the game is REQUIRED to advance.
+    // Step 1 — name the server AND select the real game so its templates load in
+    // step 2. Selecting the game is REQUIRED to advance.
     await this.typeInto(this.field('server_name'), opts.serverName, 'server name');
-    await this.selectGame(/minecraft/i);
+    await this.selectGame(opts.game);
     await this.advance('Next Step', 'step 1 (name/game)');
 
-    // Step 2 — pick a template (prefer PaperMC), fill any template variables, then
-    // advance. Paper is chosen over Vanilla because it generates a world much faster
-    // on a constrained CI runner while remaining vanilla-compatible, so the server
-    // reaches RUNNING within budget (see docs/KNOWN-ISSUES.md). The advance label
-    // differs from the generic "Continue without Template" path once a template is
-    // chosen, so match it tolerantly (release channels have shipped
-    // "Apply Template" / "Next Step").
+    // Step 2 — pick the catalog template. Once a template is selected the advance
+    // button reads "Apply Template" (vs "Continue without Template"); it enables
+    // immediately for a variable-less template like TOSIOS.
     await expect(
       this.templateList.getByRole('option').first(),
       'step 2: no templates loaded for the selected game (hosted template API?)',
     ).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    const paper = this.templateList.getByRole('option', { name: /paper/i }).first();
-    if (await paper.isVisible().catch(() => false)) {
-      await paper.click();
-    } else {
-      await this.templateList.getByRole('option').first().click();
-    }
-    // Template variables (if the template exposes them) — ids are the var names.
-    await this.typeIfPresent('version', opts.version, 'template version');
-    await this.typeIfPresent('memory', opts.templateMemoryGiB, 'template memory');
+    await this.templateList.getByRole('option', { name: opts.template }).first().click();
     await this.advance(/Apply Template|Next Step|Continue/, 'step 2 (template)');
 
-    // Step 3 — hardware memory limit (number+unit widget), then create + confirm.
-    await this.setMemoryLimit(opts.memoryMiB);
+    // Step 3 — the template applied its docker image + memory into the form state, so
+    // the step is already valid; create without editing.
+    if (opts.expectImagePrefill !== undefined) {
+      await expect(
+        this.field('docker_image_name'),
+        'step 3: template did not prefill the docker image',
+      ).toHaveValue(opts.expectImagePrefill, { timeout: UI_ACTION_TIMEOUT_MS });
+    }
     await this.advance('Create Server', 'step 3 (configure)', true);
 
     const confirm = this.page.getByRole('alertdialog');

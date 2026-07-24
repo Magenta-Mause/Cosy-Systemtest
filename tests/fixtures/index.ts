@@ -47,11 +47,13 @@ type WorkerFixtures = {
   /** Reusable tosios server (get-or-create) shared across lifecycle/console/files. */
   sharedServer: GameServer;
   /**
-   * Reusable Minecraft (itzg) server, RUNNING and past itzg readiness. Provisioned
-   * over the API so the `rcon` spec has a real RCON-capable server without
-   * depending on the `server-from-template` spec's UI run finishing first (specs
-   * run in parallel across workers). The `server-from-template` spec still creates
-   * its OWN server through the template UI — that UI path is its feature.
+   * Reusable Minecraft (itzg/PaperMC) server, RUNNING and past itzg readiness.
+   * Provisioned over the API so the `rcon` spec has a real RCON-capable server.
+   *
+   * This is the SUITE'S ONLY Minecraft boot: `server-from-template` switched to the
+   * tiny TOSIOS catalog template, so there is no longer a second concurrent PaperMC
+   * pull to contend on the 4-vCPU runner. rcon stays on Minecraft because TOSIOS has
+   * no RCON — the itzg image is what makes the RCON round-trip testable.
    */
   minecraftServer: GameServer;
 };
