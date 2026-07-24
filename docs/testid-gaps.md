@@ -78,6 +78,28 @@ object uses today.
 | `delete-submit-btn` | `src/components/display/GameServer/FileBrowser/dialogs/DeleteDialog.tsx` | `dialog.getByRole('button', { name: 'Delete' })` |
 | `files-upload-btn` / `files-download-dir-btn` | `src/components/display/GameServer/FileBrowser/FileBrowserDialog/FileBrowserDialog.tsx` | `getByRole('button', { name: 'Upload' })` / `getByRole('button', { name: 'Download Directory' })` (not currently driven by a spec) |
 
+## Phase 2 — extended feature selectors (release channel: role/label/text/id only)
+
+Icon-only controls with **no accessible name** are located structurally today
+(marked `// TODO(testid)` in the page objects) — each needs a `data-testid`:
+
+| Suggested `data-testid` | Frontend file | Current selector |
+|---|---|---|
+| `invite-user-btn` | `.../UserInvite/UserInviteButton.tsx` | `getByRole('button', { name: 'Users' })` (its aria-label, not the visible "Invite User") |
+| `invite-username-input` / `invite-role-select` / `invite-generate-btn` | `.../UserInvite/InviteForm/InviteForm.tsx` | `#invite-username` / `#invite-role` / `getByRole('button', { name: 'Generate Invite' })` |
+| `invite-link` | `.../UserInvite/InviteForm/InviteResult.tsx` | `getByText(/inviteToken=/)` (select-all div) |
+| `user-row-menu-btn` | `.../UserDetailPage/UserRow.tsx` | **icon-only, no name** → `[data-slot="card"]` (filter by username) → `[data-slot="button"]` |
+| `settings-confirm-btn` | `.../GameServerSettings/SettingsActionButtons.tsx` | `getByRole('button', { name: 'Confirm' })` |
+| `settings-server-name-input` | `.../EditGameServer/InputFieldEditGameServer.tsx` | `getByPlaceholder('My Game Server')` (**not label-associated** — no id) |
+| `design-tile-{house,castle}` | `.../DesignSettingsSection/DesignSettingsSection.tsx` | `getByRole('button', { name: 'House'\|'Castle' })`; **selection has no aria** → asserted via the `bg-button-primary-default/30` class |
+| `rcon-{enable-toggle,port-input,password-input}` | `.../RconSettingsSection/RconSettings.tsx` | `getByRole('button', { name: 'Enable RCON' })` / placeholders `25575` / `mysecretpassword` |
+| `webhook-{create-btn,url-input}` + event toggles | `.../WebhooksSettingsSection/*` | `getByRole('button', { name: 'Create Webhook' })`, `#webhook-url`, `getByRole('button', { name: 'Server Stopped' })` (webhook edit/delete are icon-only, **no name**) |
+| `access-group-*`, member remove btn | `.../AccessManagement/*` | group-name/add-user via placeholders `Enter group name` / `Enter username`; permissions via `getByRole('button', { name: 'See Server' })`; remove-member is icon-only, **no name** |
+| `metric-card-{type}` | `.../MetricDisplay/MetricGraph.tsx` | `getByText('CPU'\|'Memory')` (CardTitle is a div); chart SVG asserted via `.recharts-surface path` |
+| `public-dashboard-visible-toggle`, widget delete btn | `.../GenericLayoutBuilder/GenericLayoutBuilder.tsx` | `getByRole('button', { name: 'Make Public Dashboard Visible' })`; layout-builder delete-widget is icon-only, **no name** |
+| `game-option-{slug}`, `template-option-{id}` | `.../CreateGameServer/GenericGameServerCreationInputField.tsx`, `.../CreationSteps/Step2/*` | released step 1 selects a game via the `#external_game_id` AutoComplete (`getByRole('option', { name })`, generic fallback = "Generic Game"); step-2 template cards = `role=option` in a `role=listbox` |
+| console `send-btn` | `.../LogDisplay/LogDisplay.tsx` | icon-only, **no name** → commands submitted via Enter |
+
 ## Feature notes (released version — not just selectors)
 
 - **File writes require a declared volume mount.** In the released browser
@@ -90,3 +112,17 @@ object uses today.
 - **No file-edit affordance.** The released file browser has no in-place file editor
   (no `EditFileModal`), so file create/edit is out of scope for the `files` spec. If a
   future release adds one, extend the spec + this table then.
+- **No forced first-login password-change flow.** `UserInviteService` builds the
+  redeemed user with `defaultPasswordReset(true)`, but the flag's getter has **zero
+  usages** and no change-password step is surfaced anywhere in the frontend — it is a
+  dormant no-op. The `invites` spec proves the reachable path (redeem → normal login);
+  if forced rotation is intended, both backend enforcement and a UI dialog are missing.
+- **No dedicated public-dashboard route.** The public dashboard is `/server/{uuid}/
+  ?view=public` (reachable unauthenticated), not a `/public/...` route. Fine for the
+  test; noted so nobody hunts for a route that doesn't exist.
+- **Public-dashboard layout builder is drag-and-drop** with icon-only, id-less
+  controls, so the `public-dashboard` spec configures the layout over the API and
+  proves the unauthenticated *view* renders. Add ids to `GenericLayoutBuilder` to make
+  the editor itself UI-testable.
+- **Template cards carry no artwork** (text-only); artwork lives only on the game
+  entries, so `games-search` asserts artwork on the game option, not the template.
