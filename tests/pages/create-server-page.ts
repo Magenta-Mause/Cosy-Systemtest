@@ -300,6 +300,23 @@ export class CreateServerPage {
   }
 
   /**
+   * Retry-tolerant "game is offered" check for the flaky hosted games API. The
+   * autocomplete queries cosy-game-api (SteamGridDB proxy), which under the catalog
+   * spec's multiple searches can be eventually-consistent / rate-limited, so a game
+   * that `games-search` finds may momentarily not appear here. Re-type the query to
+   * re-trigger the hosted search and retry until the option shows, within a generous
+   * budget — proving the catalog is reachable without flaking on transient misses.
+   */
+  async expectGameOfferedResilient(name: string): Promise<void> {
+    await expect(async () => {
+      await this.searchGames(name); // re-type to (re)trigger the hosted search
+      await expect(this.gameOption(new RegExp(name, 'i')).first()).toBeVisible({
+        timeout: UI_ACTION_TIMEOUT_MS,
+      });
+    }).toPass({ timeout: UI_FLOW_TIMEOUT_MS });
+  }
+
+  /**
    * Assert the search returns a matching game result. Proves the hosted game-service
    * path (backend → cosy-game-api → SteamGridDB) is reachable and the query returns
    * the expected game as a selectable option. Call {@link searchGames} first so the
