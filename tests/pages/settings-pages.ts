@@ -59,10 +59,16 @@ export class DesignSettingsPage {
     await this.page.goto(`/server/${this.uuid}/settings/design`);
   }
 
-  /** A design tile button (accessible name is its label, "House" / "Castle"). */
+  /**
+   * A design tile button. Each tile is a `<button>` wrapping an `<img alt={label}>`
+   * plus a `<span>{label}</span>`, so its accessible name is the label repeated
+   * ("Castle Castle") — an `exact: true` match on just "Castle" finds nothing and
+   * the click hangs until timeout. A non-exact (substring) match on the label is
+   * robust and still disjoint between "House" and "Castle".
+   */
   private designTile(label: 'House' | 'Castle'): Locator {
     // TODO(testid): add data-testid={`design-tile-${value}`} to DesignSettingsSection button
-    return this.page.getByRole('button', { name: label, exact: true });
+    return this.page.getByRole('button', { name: label }).first();
   }
 
   async chooseDesign(label: 'House' | 'Castle'): Promise<void> {
@@ -71,12 +77,13 @@ export class DesignSettingsPage {
   }
 
   /**
-   * Assert a design tile is the selected one. Selection carries no aria state; the
-   * selected tile is the only one with the `bg-button-primary-default/30` class
-   * (both tiles share the border class), so we match on that.
+   * Assert a design tile is the selected one. Selection carries no aria state; only
+   * the selected tile gets the `bg-button-primary-default/30` class (the unselected
+   * tile instead carries `hover:bg-button-primary-default/10`), so we match the
+   * exact `/30` variant to distinguish them.
    */
   async expectSelected(label: 'House' | 'Castle'): Promise<void> {
-    await expect(this.designTile(label)).toHaveClass(/bg-button-primary-default\//, {
+    await expect(this.designTile(label)).toHaveClass(/bg-button-primary-default\/30/, {
       timeout: UI_FLOW_TIMEOUT_MS,
     });
   }
