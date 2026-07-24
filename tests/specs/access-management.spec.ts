@@ -10,7 +10,7 @@ import { TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE, UI_FLOW_TIMEOUT_MS } from '@hel
  *
  * Granted: "See Server" + "Read Server Logs" (permitted → the user can view the
  * server). NOT granted: "Start/Stop Server" (restricted → the start/stop control
- * is absent for them).
+ * is rendered but DISABLED for them, with a "no permission" tooltip).
  *
  * A dedicated throwaway server is used so the group + membership are torn down
  * simply by deleting the server (which cascades the access group). The second user
@@ -57,9 +57,9 @@ test.describe('@extended access-management', () => {
         });
       });
 
-      await test.step('Then: the member CANNOT start/stop it (restricted action is absent)', async () => {
+      await test.step('Then: the member CANNOT start/stop it (control is present but disabled)', async () => {
         const otherDetail = new ServerDetailPage(otherPage, server.uuid);
-        await otherDetail.expectNoStartStopControl();
+        await otherDetail.expectStartStopControlDisabled();
       });
     } finally {
       await apiClient.deleteServer(server.uuid).catch(() => {});

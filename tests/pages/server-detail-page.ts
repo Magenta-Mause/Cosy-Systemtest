@@ -54,6 +54,12 @@ export class ServerDetailPage {
     return this.page.getByRole('button', { name: 'Shutdown', exact: true });
   }
 
+  /** The start/stop control regardless of its current label ("Start" | "Shutdown"). */
+  private get startStopButton(): Locator {
+    // TODO(testid): add data-testid="server-start-stop-btn" to GameServerStartStopButton
+    return this.page.getByRole('button', { name: /^(Start|Shutdown)$/ });
+  }
+
   /** Assert the live status indicator shows the expected status label. */
   async expectStatus(status: keyof typeof STATUS_LABEL, timeout = WS_MESSAGE_TIMEOUT_MS): Promise<void> {
     // TODO(testid): add data-testid="server-status-indicator" to GameServerStatusIndicator
@@ -63,12 +69,15 @@ export class ServerDetailPage {
   }
 
   /**
-   * Assert the start/stop control is NOT available (used to verify a restricted
-   * user without START_STOP_SERVER cannot control the server).
+   * Assert the start/stop control is present but DISABLED — used to verify a member
+   * with SEE_SERVER but WITHOUT START_STOP_SERVER cannot control the server. The
+   * button is ALWAYS rendered (GameServerStartStopButton); lacking the permission
+   * only sets `disabled: !canStartStopServer` (plus a "noStartStopPermission"
+   * tooltip), so the control is disabled, NOT absent.
    */
-  async expectNoStartStopControl(): Promise<void> {
-    await expect(this.startButton).toHaveCount(0, { timeout: UI_ACTION_TIMEOUT_MS });
-    await expect(this.stopButton).toHaveCount(0, { timeout: UI_ACTION_TIMEOUT_MS });
+  async expectStartStopControlDisabled(): Promise<void> {
+    await expect(this.startStopButton.first()).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    await expect(this.startStopButton.first()).toBeDisabled({ timeout: UI_ACTION_TIMEOUT_MS });
   }
 
   async start(): Promise<void> {

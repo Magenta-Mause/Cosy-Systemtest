@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { expect } from '@playwright/test';
-import { UI_ACTION_TIMEOUT_MS, WS_MESSAGE_TIMEOUT_MS } from '@helpers/constants';
+import { WS_MESSAGE_TIMEOUT_MS } from '@helpers/constants';
 
 /**
  * The public dashboard, rendered from the normal server route with `?view=public`.
@@ -36,20 +36,18 @@ export class PublicDashboardView {
 
   /**
    * Confirm the viewer is genuinely unauthenticated. There is NO "Sign In"
-   * affordance on this route: the login dialog (LoginDisplay) is rendered only on
-   * the home route, never on `/server/{uuid}`, so waiting for a "Sign In" button
-   * here always timed out. The server-detail chrome DOES render for the public
-   * view, but the start/stop control (GameServerStartStopButton) is hidden unless
-   * the viewer holds the SEE_SERVER permission — which an unauthenticated viewer
-   * does not — so it is absent. An authenticated owner opening the same page WOULD
-   * see it. Assert neither the "Start" nor the "Shutdown" control is present.
+   * affordance on this route (the login dialog lives only on the home route), and
+   * the public view renders the full server-detail chrome INCLUDING the start/stop
+   * control: the anonymous viewer is granted SEE_SERVER (so the button is not
+   * hidden) but NOT START_STOP_SERVER, so GameServerStartStopButton renders it
+   * DISABLED (only `disabled` is toggled — the button is always present). Assert the
+   * control is present but disabled — an authenticated controller would see it
+   * enabled. The label is "Shutdown" while the shared server runs / "Start" if
+   * stopped, so match either.
    */
   async expectUnauthenticated(): Promise<void> {
-    await expect(this.page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(0, {
-      timeout: UI_ACTION_TIMEOUT_MS,
-    });
-    await expect(this.page.getByRole('button', { name: 'Shutdown', exact: true })).toHaveCount(0, {
-      timeout: UI_ACTION_TIMEOUT_MS,
-    });
+    const control = this.page.getByRole('button', { name: /^(Start|Shutdown)$/ });
+    await expect(control.first()).toBeVisible({ timeout: WS_MESSAGE_TIMEOUT_MS });
+    await expect(control.first()).toBeDisabled({ timeout: WS_MESSAGE_TIMEOUT_MS });
   }
 }
