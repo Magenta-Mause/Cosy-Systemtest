@@ -41,6 +41,19 @@ that controlled state; the page objects use `pressSequentially(value, { delay: 6
 (real per-keystroke events) and assert `toHaveValue` — verified locally to persist the
 value at both machine and human speed.
 
+## create wizard — the RAM limit is a compound number+unit widget
+
+Step 3's "RAM Limit" (`MemoryLimitInput`) is **not** a single text input. It is a
+numeric `<input type="number">` (id `docker_max_memory`, DOM value = just the number,
+e.g. `"512"`) plus a separate unit `<Select>` (`"MiB"` | `"GiB"`, default `"MiB"`); it
+emits `${number}${unit}` (e.g. `"512MiB"`) to the parent. Typing the whole string
+`"512MiB"` into the number input is wrong — the letters are rejected and its value
+stays `"512"`. The suite types only the numeric part and, for non-default units (GiB,
+used by the Phase-2 Minecraft template), opens the unit select and picks the option.
+Verified locally: typing `"512"` persists as `"512"` and Create Server enables
+(the parent receives `"512MiB"`). Note the RAM/CPU fields are only *required* when the
+user has a quota; the installer admin (OWNER) is unlimited, so they are optional.
+
 ## RARE: React #185 (blank page) during the create flow — heisenbug
 
 One earlier CI run blanked to a white page with **React #185** ("maximum update depth

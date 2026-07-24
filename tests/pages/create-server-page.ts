@@ -100,6 +100,49 @@ export class CreateServerPage {
   }
 
   /**
+   * The RAM limit is a COMPOUND widget (MemoryLimitInput), not a plain text input:
+   * a numeric `<input type="number">` (its DOM value is just the number, e.g. "512")
+   * plus a separate unit `<Select>` ("MiB" | "GiB", default "MiB"). It emits
+   * `${number}${unit}` (e.g. "512MiB") to the parent. So we type only the numeric
+   * part into the number input and, only when the unit differs from the default,
+   * pick it from the select. `id="docker_max_memory"` lands on the numeric input.
+   */
+  private async setMemoryLimit(memory: string): Promise<void> {
+    const m = /^\s*(\d+(?:\.\d+)?)\s*(MiB|GiB)?\s*$/.exec(memory);
+    if (!m) {
+      throw new Error(`Unrecognised memory limit "${memory}" (expected e.g. "512MiB" or "2GiB").`);
+    }
+    const numeric = m[1];
+    const unit = (m[2] ?? 'MiB') as 'MiB' | 'GiB';
+
+    const numInput = this.field('docker_max_memory');
+    await numInput.click();
+    await numInput.press('ControlOrMeta+a');
+    await numInput.press('Delete');
+    await numInput.pressSequentially(numeric, { delay: KEYSTROKE_DELAY_MS });
+    try {
+      // Assert the NUMERIC value (the widget never holds the "512MiB" string).
+      await expect(numInput).toHaveValue(numeric, { timeout: UI_ACTION_TIMEOUT_MS });
+    } catch (e) {
+      await this.throwIfCrashed('typing the memory limit');
+      throw new Error(
+        `memory limit: numeric value "${numeric}" did not persist in the number input.`,
+        { cause: e },
+      );
+    }
+
+    if (unit !== 'MiB') {
+      // The unit <Select> (Radix combobox) lives in the memory input's end decorator,
+      // a sibling of the numeric input within the same wrapper.
+      // TODO(testid): add data-testid="memory-unit-select" to MemoryLimitInput's Select
+      const unitSelect = numInput.locator('xpath=..').getByRole('combobox');
+      await unitSelect.click();
+      await this.page.getByRole('option', { name: unit, exact: true }).click();
+      await expect(unitSelect).toContainText(unit, { timeout: UI_ACTION_TIMEOUT_MS });
+    }
+  }
+
+  /**
    * Select a game so `external_game_id` becomes touched+valid (required to advance
    * step 1). We pick the always-present generic fallback item ("Generic Game"):
    *   - it is rendered client-side by `alwaysIncludeFallback`, so it works even if
@@ -167,7 +210,7 @@ export class CreateServerPage {
     if (opts.imageTag && opts.imageTag !== 'latest') {
       await this.typeInto(this.field('docker_image_tag'), opts.imageTag, 'image tag');
     }
-    await this.typeInto(this.field('docker_max_memory'), opts.memoryLimit, 'memory limit');
+    await this.setMemoryLimit(opts.memoryLimit);
     if (opts.volumeMount) {
       // The volume-mount ListInput always renders one empty row; type into it
       // directly (no "Add" needed). Placeholder "/data" is unique on this step.
