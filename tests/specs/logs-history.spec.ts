@@ -2,7 +2,6 @@ import { test, expect, runsOnlyWithInstall } from '@fixtures/index';
 import { ConsolePage, ServerDetailPage } from '@pages/index';
 import {
   LOGS_HISTORY_TIMEOUT_MS,
-  SERVER_COLD_START_TIMEOUT_MS,
   SERVER_STOP_TIMEOUT_MS,
   TEST_SERVER_MEMORY_LIMIT,
   TOSIOS_IMAGE,
@@ -47,8 +46,7 @@ test.describe('@extended logs-history', () => {
 
     try {
       await test.step('Given: the server ran and produced output ingested by Loki', async () => {
-        await apiClient.startServer(server.uuid);
-        await apiClient.waitForStatus(server.uuid, 'RUNNING', SERVER_COLD_START_TIMEOUT_MS);
+        await apiClient.ensureRunning(server.uuid);
         // Wait until at least one line is queryable from history (Loki ingestion).
         await apiClient.waitForLogMatch(server.uuid, /\S/, LOGS_HISTORY_TIMEOUT_MS);
       });

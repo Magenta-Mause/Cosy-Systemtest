@@ -113,10 +113,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
         memory_limit: `${MINECRAFT_MEMORY_GIB}GiB`,
         environment_variables: MINECRAFT_ENV,
       });
-      if ((await apiClient.getStatus(server.uuid)) !== 'RUNNING') {
-        await apiClient.startServer(server.uuid);
-        await apiClient.waitForStatus(server.uuid, 'RUNNING', MINECRAFT_READY_TIMEOUT_MS);
-      }
+      await apiClient.ensureRunning(server.uuid, MINECRAFT_READY_TIMEOUT_MS);
       // itzg prints "Done (…)! For help, type ..." once the world is generated and
       // the server is accepting connections (and RCON is up).
       await apiClient.waitForLogMatch(server.uuid, /Done \(|RCON running/i, MINECRAFT_READY_TIMEOUT_MS);

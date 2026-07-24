@@ -17,7 +17,12 @@
  * The identity token is a short-lived JWT sent as `Authorization: Bearer …`.
  */
 import { API_CONTEXT_PATH, resolveBaseURL } from './constants';
-import { STATUS_POLL_INTERVAL_MS, STATUS_POLL_TIMEOUT_MS, TOSIOS_IMAGE } from './constants';
+import {
+  SERVER_COLD_START_TIMEOUT_MS,
+  STATUS_POLL_INTERVAL_MS,
+  STATUS_POLL_TIMEOUT_MS,
+  TOSIOS_IMAGE,
+} from './constants';
 import type { AdminCredentials } from './install';
 
 export type GameServerStatus =
@@ -273,6 +278,58 @@ export class ApiClient {
     throw new Error(
       `Server ${uuid} did not reach ${target} within ${timeoutMs}ms (last status: ${last}).`,
     );
+  }
+
+  /**
+   * Wait until a server is in a state from which `start()` is legal — the backend
+   * rejects `POST /start` with 409 unless the status `isStopped()` (STOPPED or
+   * FAILED). A server that was just started (image pull) transiently reports
+   * AWAITING_UPDATE / PULLING_IMAGE, and one being stopped reports STOPPING; none
+   * are terminal, so we keep polling. RUNNING is also an acceptable resting state
+   * — the shared tosios server is looked up BY NAME and therefore shared across
+   * parallel workers, so another worker may already have started it; we return it
+   * so the caller can skip its own start. Only a timeout is an error.
+   */
+  async waitUntilStartable(
+    uuid: string,
+    timeoutMs = SERVER_COLD_START_TIMEOUT_MS,
+  ): Promise<GameServerStatus | undefined> {
+    const deadline = Date.now() + timeoutMs;
+    let last: GameServerStatus | undefined;
+    while (Date.now() < deadline) {
+      last = await this.getStatus(uuid);
+      if (last === 'STOPPED' || last === 'FAILED' || last === 'RUNNING') return last;
+      // AWAITING_UPDATE / PULLING_IMAGE / STOPPING → still settling, keep waiting.
+      await sleep(STATUS_POLL_INTERVAL_MS);
+    }
+    throw new Error(
+      `Server ${uuid} did not become startable within ${timeoutMs}ms (last status: ${last}).`,
+    );
+  }
+
+  /**
+   * Idempotently bring a server to RUNNING. Replaces the ad-hoc
+   * `if (status !== 'RUNNING') { startServer; waitForStatus('RUNNING') }` blocks
+   * that 409'd or timed out under image-pull contention (two PaperMC pulls now
+   * boot concurrently with the tosios specs on a 4-vCPU runner, stalling tosios
+   * servers in AWAITING_UPDATE). It waits until the server is startable, starts it
+   * unless it is already up, and tolerates a 409 from a worker that raced us to
+   * the start of the shared-by-name server (we then simply wait for the RUNNING it
+   * will reach). The RUNNING budget is generous by default; heavy servers pass a
+   * larger one (e.g. Minecraft world-gen).
+   */
+  async ensureRunning(uuid: string, runningTimeoutMs = SERVER_COLD_START_TIMEOUT_MS): Promise<void> {
+    const settled = await this.waitUntilStartable(uuid);
+    if (settled === 'RUNNING') return;
+    try {
+      await this.startServer(uuid);
+    } catch (err) {
+      // A parallel worker may have started the shared-by-name server between our
+      // status read and this call (409 "not in a stopped state" / "already
+      // starting"). That is fine — fall through and wait for the RUNNING it reaches.
+      if (!/\b409\b/.test(String(err))) throw err;
+    }
+    await this.waitForStatus(uuid, 'RUNNING', runningTimeoutMs);
   }
 
   /**

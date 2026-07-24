@@ -1,6 +1,6 @@
 import { test, expect, runsOnlyWithInstall } from '@fixtures/index';
 import { CreateServerPage, FilesPage, HomePage } from '@pages/index';
-import { SERVER_START_TIMEOUT_MS, TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from '@helpers/constants';
+import { TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from '@helpers/constants';
 
 /**
  * Feature: files — real file operations through the released file browser: create
@@ -17,7 +17,7 @@ import { SERVER_START_TIMEOUT_MS, TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from 
 test.describe('@core files', () => {
   runsOnlyWithInstall();
 
-  test.describe.configure({ timeout: 240_000 });
+  test.describe.configure({ timeout: 360_000 });
 
   test('create, rename and delete a directory inside a volume mount', async ({
     loggedInPage: page,
@@ -49,10 +49,7 @@ test.describe('@core files', () => {
         expect(id, 'server uuid in URL').toBeTruthy();
 
         // Start it so the managed volume is materialised on disk before file ops.
-        if ((await apiClient.getStatus(id!)) !== 'RUNNING') {
-          await apiClient.startServer(id!);
-        }
-        await apiClient.waitForStatus(id!, 'RUNNING', SERVER_START_TIMEOUT_MS);
+        await apiClient.ensureRunning(id!);
         return id!;
       });
 

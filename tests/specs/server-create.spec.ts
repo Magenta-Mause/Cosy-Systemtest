@@ -1,6 +1,10 @@
 import { test, expect, runsOnlyWithInstall } from '@fixtures/index';
 import { CreateServerPage, HomePage, ServerDetailPage } from '@pages/index';
-import { TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from '@helpers/constants';
+import {
+  SERVER_COLD_START_TIMEOUT_MS,
+  TEST_SERVER_MEMORY_LIMIT,
+  TOSIOS_IMAGE,
+} from '@helpers/constants';
 
 /**
  * Feature: server-create — create a server with a custom image through the UI
@@ -19,8 +23,9 @@ import { TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from '@helpers/constants';
 test.describe('@core server-create', () => {
   runsOnlyWithInstall();
 
-  // A cold Docker pull + start on a fresh runner needs a wide budget.
-  test.describe.configure({ timeout: 180_000 });
+  // A cold Docker pull + start on a fresh runner needs a wide budget (and even
+  // wider under the extended suite's concurrent image pulls — see constants).
+  test.describe.configure({ timeout: 360_000 });
 
   test('create a tosios server through the UI reaches RUNNING', async ({
     loggedInPage: page,
@@ -56,12 +61,16 @@ test.describe('@core server-create', () => {
 
       await test.step('When: starting it via the UI, Then: it reaches RUNNING', async () => {
         const detail = new ServerDetailPage(page, uuid);
-        // Created servers start out STOPPED in this release; start unless the
-        // backend already brought it up.
-        if ((await apiClient.getStatus(uuid)) !== 'RUNNING') {
+        // Created servers start out STOPPED in this release, but the freshly
+        // created server may still be settling; wait until it is startable (so the
+        // UI Start control is present and clickable) then start via the UI, unless
+        // the backend already brought it up. The RUNNING wait uses the generous
+        // cold-pull budget and naturally tolerates the AWAITING_UPDATE/PULLING_IMAGE
+        // states the status indicator passes through under image-pull contention.
+        if ((await apiClient.waitUntilStartable(uuid)) !== 'RUNNING') {
           await detail.start();
         }
-        await detail.expectStatus('RUNNING');
+        await detail.expectStatus('RUNNING', SERVER_COLD_START_TIMEOUT_MS);
       });
     } finally {
       // Keep the runner tidy even though the VM is thrown away after the run.

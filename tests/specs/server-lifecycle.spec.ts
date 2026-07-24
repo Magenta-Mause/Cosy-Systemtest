@@ -1,6 +1,6 @@
 import { test, expect, runsOnlyWithInstall } from '@fixtures/index';
 import { ServerDetailPage } from '@pages/index';
-import { SERVER_START_TIMEOUT_MS, TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from '@helpers/constants';
+import { TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from '@helpers/constants';
 
 /**
  * Feature: server-lifecycle — stop and start a running server through the UI and
@@ -14,7 +14,7 @@ import { SERVER_START_TIMEOUT_MS, TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from 
 test.describe('@core server-lifecycle', () => {
   runsOnlyWithInstall();
 
-  test.describe.configure({ timeout: 240_000 });
+  test.describe.configure({ timeout: 480_000 });
 
   test('stop and start via UI reflect live status, then delete', async ({
     loggedInPage: page,
@@ -25,10 +25,7 @@ test.describe('@core server-lifecycle', () => {
 
     await test.step('Given: the shared server is running', async () => {
       // Bring it up over the API so the UI has a RUNNING server to act on.
-      if ((await apiClient.getStatus(sharedServer.uuid)) !== 'RUNNING') {
-        await apiClient.startServer(sharedServer.uuid);
-        await apiClient.waitForStatus(sharedServer.uuid, 'RUNNING', SERVER_START_TIMEOUT_MS);
-      }
+      await apiClient.ensureRunning(sharedServer.uuid);
       await detail.gotoOverview();
       await detail.expectStatus('RUNNING');
     });

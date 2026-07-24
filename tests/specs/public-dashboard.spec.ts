@@ -1,6 +1,5 @@
 import { test, runsOnlyWithInstall } from '@fixtures/index';
 import { PublicDashboardView } from '@pages/index';
-import { SERVER_START_TIMEOUT_MS } from '@helpers/constants';
 
 /**
  * Feature: public-dashboard — with a public dashboard configured for a server, a
@@ -18,7 +17,7 @@ import { SERVER_START_TIMEOUT_MS } from '@helpers/constants';
 test.describe('@extended public-dashboard', () => {
   runsOnlyWithInstall();
 
-  test.describe.configure({ timeout: 180_000 });
+  test.describe.configure({ timeout: 360_000 });
 
   test('an unauthenticated viewer sees the configured public dashboard widgets', async ({
     apiClient,
@@ -37,10 +36,7 @@ test.describe('@extended public-dashboard', () => {
 
     try {
       await test.step('Given: the shared server is running with a public dashboard configured', async () => {
-        if ((await apiClient.getStatus(sharedServer.uuid)) !== 'RUNNING') {
-          await apiClient.startServer(sharedServer.uuid);
-          await apiClient.waitForStatus(sharedServer.uuid, 'RUNNING', SERVER_START_TIMEOUT_MS);
-        }
+        await apiClient.ensureRunning(sharedServer.uuid);
         await apiClient.setMetricLayout(sharedServer.uuid, [
           { size: 'MEDIUM', metric_type: 'CPU_PERCENT' },
           { size: 'MEDIUM', metric_type: 'MEMORY_PERCENT' },

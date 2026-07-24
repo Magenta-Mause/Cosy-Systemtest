@@ -1,7 +1,6 @@
 import { test, expect, runsOnlyWithInstall } from '@fixtures/index';
 import { WebhooksSettingsPage } from '@pages/index';
 import {
-  SERVER_START_TIMEOUT_MS,
   SERVER_STOP_TIMEOUT_MS,
   TEST_SERVER_MEMORY_LIMIT,
   TOSIOS_IMAGE,
@@ -26,7 +25,7 @@ import {
 test.describe('@extended webhooks', () => {
   runsOnlyWithInstall();
 
-  test.describe.configure({ timeout: 180_000 });
+  test.describe.configure({ timeout: 420_000 });
 
   test('a created webhook delivers the subscribed event to a local sink', async ({
     loggedInPage: page,
@@ -44,8 +43,7 @@ test.describe('@extended webhooks', () => {
 
     try {
       await test.step('Given: the server is running', async () => {
-        await apiClient.startServer(server.uuid);
-        await apiClient.waitForStatus(server.uuid, 'RUNNING', SERVER_START_TIMEOUT_MS);
+        await apiClient.ensureRunning(server.uuid);
       });
 
       await test.step('When: creating an n8n webhook for "Server Stopped" pointing at the sink', async () => {

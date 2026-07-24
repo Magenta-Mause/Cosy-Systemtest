@@ -1,6 +1,5 @@
 import { test, runsOnlyWithInstall } from '@fixtures/index';
 import { MetricsPage } from '@pages/index';
-import { SERVER_START_TIMEOUT_MS } from '@helpers/constants';
 
 /**
  * Feature: metrics — the metrics page renders the (InfluxDB-backed) CPU and Memory
@@ -15,7 +14,7 @@ import { SERVER_START_TIMEOUT_MS } from '@helpers/constants';
 test.describe('@extended metrics', () => {
   runsOnlyWithInstall();
 
-  test.describe.configure({ timeout: 240_000 });
+  test.describe.configure({ timeout: 360_000 });
 
   test('the metrics page renders CPU/Memory series with data points', async ({
     loggedInPage: page,
@@ -25,10 +24,7 @@ test.describe('@extended metrics', () => {
     const metrics = new MetricsPage(page, sharedServer.uuid);
 
     await test.step('Given: the shared server is running with a CPU/Memory metric layout', async () => {
-      if ((await apiClient.getStatus(sharedServer.uuid)) !== 'RUNNING') {
-        await apiClient.startServer(sharedServer.uuid);
-        await apiClient.waitForStatus(sharedServer.uuid, 'RUNNING', SERVER_START_TIMEOUT_MS);
-      }
+      await apiClient.ensureRunning(sharedServer.uuid);
       await apiClient.setMetricLayout(sharedServer.uuid, [
         { size: 'MEDIUM', metric_type: 'CPU_PERCENT' },
         { size: 'MEDIUM', metric_type: 'MEMORY_PERCENT' },

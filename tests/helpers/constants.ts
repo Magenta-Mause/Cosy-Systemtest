@@ -41,15 +41,13 @@ export const LOGIN_TIMEOUT_MS = 30_000;
 export const SERVER_START_TIMEOUT_MS = 120_000;
 
 /**
- * Cold start of a server whose image is NOT yet warm on the host. A freshly
- * created throwaway server (e.g. `logs-history`) may be the first thing on its
- * worker to pull `tosios`, and during the full extended-suite run that cold pull
- * competes for disk/network with the heavy Minecraft/Paper pulls — in the first
- * full run this overran the standard 120 s budget and the server sat in
- * `AWAITING_UPDATE` (the first state of the async start, set before the engine
- * finishes pulling + creating the container). Kept separate from
- * SERVER_START_TIMEOUT_MS so the specs that start the already-warm shared server
- * (console/lifecycle) keep their tighter budget and describe timeouts.
+ * Generous start budget for a server whose start competes for host resources. The
+ * async start goes STOPPED → AWAITING_UPDATE → (PULLING_IMAGE) → RUNNING, and on a
+ * 4-vCPU runner the two PaperMC pulls (rcon + server-from-template) now boot
+ * concurrently with the tosios specs, so a tosios server can sit in AWAITING_UPDATE
+ * well past the standard 120 s budget. `ApiClient.ensureRunning` / `waitUntilStartable`
+ * use this as their default, and the UI "reaches RUNNING" waits reuse it, so every
+ * start tolerates a cold pull under contention. (See docs/KNOWN-ISSUES.md.)
  */
 export const SERVER_COLD_START_TIMEOUT_MS = 300_000;
 

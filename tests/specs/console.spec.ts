@@ -1,6 +1,5 @@
 import { test, runsOnlyWithInstall } from '@fixtures/index';
 import { ConsolePage, ServerDetailPage } from '@pages/index';
-import { SERVER_START_TIMEOUT_MS } from '@helpers/constants';
 
 /**
  * Feature: console — the live log stream in the console view shows container
@@ -10,7 +9,7 @@ import { SERVER_START_TIMEOUT_MS } from '@helpers/constants';
 test.describe('@core console', () => {
   runsOnlyWithInstall();
 
-  test.describe.configure({ timeout: 180_000 });
+  test.describe.configure({ timeout: 360_000 });
 
   test('the console shows live log output from the container', async ({
     loggedInPage: page,
@@ -21,10 +20,7 @@ test.describe('@core console', () => {
     const console = new ConsolePage(page);
 
     await test.step('Given: the shared server is running', async () => {
-      if ((await apiClient.getStatus(sharedServer.uuid)) !== 'RUNNING') {
-        await apiClient.startServer(sharedServer.uuid);
-        await apiClient.waitForStatus(sharedServer.uuid, 'RUNNING', SERVER_START_TIMEOUT_MS);
-      }
+      await apiClient.ensureRunning(sharedServer.uuid);
       await detail.gotoOverview();
       await detail.expectStatus('RUNNING');
     });
