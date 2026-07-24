@@ -1,6 +1,10 @@
 import type { Locator, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
-import { SERVER_START_TIMEOUT_MS, UI_ACTION_TIMEOUT_MS } from '@helpers/constants';
+import {
+  MINECRAFT_READY_TIMEOUT_MS,
+  SERVER_START_TIMEOUT_MS,
+  UI_ACTION_TIMEOUT_MS,
+} from '@helpers/constants';
 
 /**
  * The three-step create-server wizard, derived from the RELEASED frontend
@@ -151,22 +155,41 @@ export class CreateServerPage {
    *     keeping a clean path to the custom `halftheopposite/tosios` image.
    */
   private async selectGenericGame(): Promise<void> {
-    const game = this.field('external_game_id');
-    await game.click(); // defaultOpen: focus/click opens the game popover
     // The generic fallback option (i18n gameSelection.noResultsLabel = "Generic Game").
     // TODO(testid): add data-testid="game-option-generic" to the fallback AutoComplete row
-    const generic = this.page.getByRole('option', { name: 'Generic Game' });
+    await this.selectGame('Generic Game', {
+      notFound:
+        'step 1: the generic-game fallback option never appeared in the game autocomplete',
+    });
+  }
+
+  /**
+   * Select a game in step 1's `#external_game_id` autocomplete by (accessible)
+   * name. Selecting a REAL game (e.g. Minecraft) is what makes that game's
+   * templates available in step 2 — the template-creation flow builds on this.
+   * A game selection is what registers `external_game_id` as touched+valid, so
+   * this is also the gate that lets "Next Step" enable (naming alone never does).
+   */
+  async selectGame(
+    name: string | RegExp,
+    opts: { notFound?: string; expectedValue?: string | RegExp } = {},
+  ): Promise<void> {
+    const game = this.field('external_game_id');
+    await game.click(); // defaultOpen: focus/click opens the game popover
+    const option = this.page.getByRole('option', { name }).first();
     await expect(
-      generic,
-      'step 1: the generic-game fallback option never appeared in the game autocomplete',
+      option,
+      opts.notFound ?? `step 1: game "${name}" was not offered in the game autocomplete`,
     ).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await generic.click();
+    await option.click();
     // After selection the game input shows the chosen label.
-    await expect(game).toHaveValue('Generic Game', { timeout: UI_ACTION_TIMEOUT_MS });
+    await expect(game).toHaveValue(opts.expectedValue ?? name, {
+      timeout: UI_ACTION_TIMEOUT_MS,
+    });
   }
 
   /** Assert a wizard advance button is enabled (fail fast) and click it. */
-  private async advance(label: string, step: string, exact = false): Promise<void> {
+  private async advance(label: string | RegExp, step: string, exact = false): Promise<void> {
     const btn = this.dialog.getByRole('button', { name: label, exact });
     try {
       await expect(btn).toBeEnabled({ timeout: UI_ACTION_TIMEOUT_MS });
@@ -229,7 +252,152 @@ export class CreateServerPage {
   async openCreatedServer(): Promise<void> {
     const success = this.page.getByRole('dialog').filter({ hasText: 'Server Created!' });
     await expect(success).toBeVisible({ timeout: SERVER_START_TIMEOUT_MS });
-    // Released label is "Go to dashboard" (main uses "Open Dashboard").
-    await success.getByRole('button', { name: 'Go to dashboard' }).click();
+    // Released label is "Go to dashboard" (main used "Open Dashboard").
+    await success.getByRole('button', { name: /Go to dashboard|Open Dashboard/ }).click();
+  }
+
+  /**
+   * Same success dialog as {@link openCreatedServer}, but wait the long
+   * Minecraft-ready budget: an itzg image pull + EULA + world generation can run
+   * for minutes before "Server Created!" appears. Used by the template flow.
+   */
+  async openCreatedServerSlow(): Promise<void> {
+    const success = this.page.getByRole('dialog').filter({ hasText: 'Server Created!' });
+    await expect(success).toBeVisible({ timeout: MINECRAFT_READY_TIMEOUT_MS });
+    await success.getByRole('button', { name: /Go to dashboard|Open Dashboard/ }).click();
+  }
+
+  // ── Step 1/2: game catalog & template inspection (templates / games-search) ──
+  //
+  // The released wizard's game picker IS the step-1 `#external_game_id`
+  // autocomplete (opened by clicking the field; typing filters it). There is no
+  // separate "Search games..." sidebar on release 5dba6e8, so these catalog
+  // helpers drive the SAME control the creation flow uses — keeping the extended
+  // catalog specs consistent with main's corrected wizard rather than forking a
+  // second UI model. Templates live on step 2 ("Choose Template"), reached via
+  // "Next Step" once step 1 is valid (name + game). Exact option/artwork DOM is
+  // best-effort and may need CI selector tuning against the live catalog.
+
+  /** A game option row in the step-1 autocomplete popover (name = game label). */
+  private gameOption(name: string | RegExp): Locator {
+    // TODO(testid): add data-testid={`game-option-${slug}`} to the AutoComplete row
+    return this.page.getByRole('option', { name });
+  }
+
+  /** The step-2 template list is a role=listbox of role=option cards. */
+  private get templateList(): Locator {
+    return this.dialog.getByRole('listbox');
+  }
+
+  /**
+   * Filter the game catalog by typing into the `#external_game_id` autocomplete
+   * at human cadence (the field is a controlled input — a single-event fill()
+   * would not commit; see the module header).
+   */
+  async searchGames(query: string): Promise<void> {
+    const game = this.field('external_game_id');
+    await game.click();
+    await game.press('ControlOrMeta+a');
+    await game.press('Delete');
+    await game.pressSequentially(query, { delay: KEYSTROKE_DELAY_MS });
+  }
+
+  /** Assert a game is offered in the catalog (case-insensitive on its name). */
+  async expectGameOffered(name: string): Promise<void> {
+    await this.field('external_game_id').click(); // open the popover
+    await expect(this.gameOption(new RegExp(name, 'i')).first()).toBeVisible({
+      timeout: UI_ACTION_TIMEOUT_MS,
+    });
+  }
+
+  /**
+   * Assert a searched game renders WITH artwork: its autocomplete option row
+   * contains an `<img>` whose src is a non-empty artwork URL (game-service →
+   * SteamGridDB). Call {@link searchGames} first so the popover is open+filtered.
+   */
+  async expectGameHasArtwork(name: string): Promise<void> {
+    const option = this.gameOption(new RegExp(name, 'i')).first();
+    await expect(option).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    await expect(option.locator('img')).toHaveAttribute('src', /\S/, {
+      timeout: UI_ACTION_TIMEOUT_MS,
+    });
+  }
+
+  /**
+   * Advance from a chosen game (step 1) to "Choose Template" (step 2) and assert
+   * at least one template option is offered — proof the hosted catalog loaded.
+   * A server name is required for step 1 to validate, so a throwaway one is
+   * entered if the caller has not set it (catalog specs only care about step 2).
+   */
+  async expectTemplateOptionsPresent(): Promise<void> {
+    const nameField = this.field('server_name');
+    if (!(await nameField.inputValue().catch(() => ''))) {
+      await this.typeInto(nameField, `catalog-check-${Date.now()}`, 'server name');
+    }
+    await this.advance('Next Step', 'step 1 (name/game)');
+    await expect(this.templateList.getByRole('option').first()).toBeVisible({
+      timeout: UI_ACTION_TIMEOUT_MS,
+    });
+  }
+
+  /** Fill a step-2 template-variable input (id=placeholder) at human cadence, only if present. */
+  private async typeIfPresent(id: string, value: string, what: string): Promise<void> {
+    const input = this.field(id);
+    if (await input.isVisible().catch(() => false)) {
+      await this.typeInto(input, value, what);
+    }
+  }
+
+  /**
+   * Full "create from a game template" flow, built on main's corrected step
+   * primitives (typeInto / selectGame / setMemoryLimit / advance + crash
+   * detector) — NOT the old "advance with just a name" path:
+   *   Step 1 "Choose name and Game" — server name + the REAL game, "Next Step".
+   *   Step 2 "Choose Template"       — pick a template (+ any variables), advance.
+   *   Step 3 "Configure your Server" — hardware memory limit, "Create Server" → confirm.
+   * Leaves the success dialog open (caller opens the server, typically via
+   * {@link openCreatedServerSlow}).
+   */
+  async createMinecraftFromTemplate(opts: {
+    serverName: string;
+    /** Hardware memory limit for step 3, e.g. "2048" (MiB) or "2GiB". */
+    memoryMiB: string;
+    /** Minecraft version for the template's "version" variable (if the template has one). */
+    version: string;
+    /** Memory (GiB) for the template's own "memory" variable (if present). */
+    templateMemoryGiB: string;
+  }): Promise<void> {
+    // Step 1 — name the server AND select the real Minecraft game so its
+    // templates load in step 2. Selecting the game is REQUIRED to advance.
+    await this.typeInto(this.field('server_name'), opts.serverName, 'server name');
+    await this.selectGame(/minecraft/i);
+    await this.advance('Next Step', 'step 1 (name/game)');
+
+    // Step 2 — pick a template (prefer a Vanilla one), fill any template
+    // variables, then advance. The advance label differs from the generic
+    // "Continue without Template" path once a template is chosen, so match it
+    // tolerantly (release channels have shipped "Apply Template" / "Next Step").
+    await expect(
+      this.templateList.getByRole('option').first(),
+      'step 2: no templates loaded for the selected game (hosted template API?)',
+    ).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    const vanilla = this.templateList.getByRole('option', { name: /vanilla/i }).first();
+    if (await vanilla.isVisible().catch(() => false)) {
+      await vanilla.click();
+    } else {
+      await this.templateList.getByRole('option').first().click();
+    }
+    // Template variables (if the template exposes them) — ids are the var names.
+    await this.typeIfPresent('version', opts.version, 'template version');
+    await this.typeIfPresent('memory', opts.templateMemoryGiB, 'template memory');
+    await this.advance(/Apply Template|Next Step|Continue/, 'step 2 (template)');
+
+    // Step 3 — hardware memory limit (number+unit widget), then create + confirm.
+    await this.setMemoryLimit(opts.memoryMiB);
+    await this.advance('Create Server', 'step 3 (configure)', true);
+
+    const confirm = this.page.getByRole('alertdialog');
+    await expect(confirm).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    await confirm.getByRole('button', { name: 'Create Server', exact: true }).click();
   }
 }
