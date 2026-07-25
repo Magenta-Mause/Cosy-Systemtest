@@ -88,6 +88,35 @@ export const GAME_SERVER_CONTAINER_PREFIX = 'cosy-';
  */
 export const EVENT_STREAM_WEDGE_GRACE_MS = 45_000;
 
+/**
+ * The socket READ timeout the released backend applies to its shared docker-java HTTP
+ * client (`EngineConfiguration.dockerClient()` → `.responseTimeout(Duration.ofSeconds(45))`).
+ * It is correct for one-shot commands and wrong for the long-lived `/events` stream,
+ * which emits nothing while no container starts or dies — so a quiet window longer than
+ * this tears the stream down. Mirrored here (not used to talk to Docker) purely so the
+ * idle probe below is provably longer than it and says why.
+ */
+export const BACKEND_DOCKER_RESPONSE_TIMEOUT_MS = 45_000;
+
+/**
+ * How long `event-stream-recovery` deliberately IDLES — no container lifecycle activity
+ * whatsoever — before provoking a transition. Twice the backend's response timeout, so
+ * the `/events` socket is guaranteed to have exceeded its read deadline with margin for
+ * scheduling jitter on a loaded runner. Raising it makes the probe stricter but slower;
+ * lowering it below `BACKEND_DOCKER_RESPONSE_TIMEOUT_MS` makes it prove nothing.
+ */
+export const EVENT_STREAM_IDLE_PROBE_MS = 2 * BACKEND_DOCKER_RESPONSE_TIMEOUT_MS;
+
+/**
+ * DELIBERATELY SHORT budget for "the backend observed the post-idle transition".
+ * A healthy backend applies a container `die` within a couple of seconds; the generous
+ * `SERVER_COLD_START_TIMEOUT_MS` exists for cold image pulls, which cannot apply here
+ * (the image is local and the container already exists). Anything slower than this is
+ * the wedge, not slowness — and `assertNotWedged` usually fails even earlier, at
+ * `EVENT_STREAM_WEDGE_GRACE_MS`, with the diagnosis.
+ */
+export const EVENT_STREAM_OBSERVE_TIMEOUT_MS = 90_000;
+
 /** How long the API client waits for a game-server to reach a target status. */
 export const STATUS_POLL_TIMEOUT_MS = SERVER_START_TIMEOUT_MS;
 

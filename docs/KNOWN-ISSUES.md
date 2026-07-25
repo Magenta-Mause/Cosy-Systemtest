@@ -369,6 +369,46 @@ workflow extracts `docker-event-stream-errors.txt` from the (now complete) backe
 log. If Docker is not queryable from the test process the diagnosis is skipped and
 plain timeout behaviour applies.
 
+**Regression guard: the `event-stream-recovery` spec.** Detection alone was not enough.
+Every other spec touches the event stream only *incidentally*, back-to-back with other
+container activity, so whether the stream dies depends on the accidental spacing of that
+activity — run 17 was green and run 18 wedged four specs on the very same image. A run
+against the fix (backend `sha-b8bec7c`) was likewise green **without ever exercising the
+recovery path**, because the stream never died in it. A green run therefore proved
+nothing.
+
+`tests/specs/event-stream-recovery.spec.ts` (`@extended`, ~2 min) removes the luck by
+provoking the condition on purpose:
+
+1. **Control** — bring a throwaway tosios server to `RUNNING`. `AWAITING_UPDATE →
+   RUNNING` has exactly one source, the Docker `start` event, so this *proves the stream
+   was alive* going into the idle window (without it, a failure could not be attributed
+   to the idling).
+2. **Provoke** — idle for `EVENT_STREAM_IDLE_PROBE_MS` (90 s = 2 ×
+   `BACKEND_DOCKER_RESPONSE_TIMEOUT_MS`) with zero container lifecycle activity, then
+   replay `docker events --since … --until …` over the window using the backend's own
+   daemon-side filters (`type=container`, actions `start|die|stop|pause|unpause` — which
+   exclude the `exec_*`/`health_status` traffic healthchecks produce) to confirm the
+   subscription really received nothing. CI's `workers: 1` rules out a parallel spec
+   feeding it an event; the replay catches it anywhere else.
+3. **Detect** — stop the server through the UI and require `STOPPED` within
+   `EVENT_STREAM_OBSERVE_TIMEOUT_MS` (90 s, not the generous 300 s). `RUNNING → STOPPING
+   → STOPPED` needs no image pull and no container creation, so nothing legitimate is
+   left to be slow about. The wedge probe above still fires first, at 45 s, telling
+   "the container never stopped" apart from "the container stopped and the backend never
+   heard" — the latter being the smoking gun. The failure message names the hypothesis
+   (45 s `responseTimeout` on a stream that emits nothing while idle) and quotes whether
+   the idle window was verified quiet.
+
+**Accepted side effect:** against a backend that still has the bug this spec *causes* the
+wedge rather than stumbling into it, so specs running after it fail too — each in ~45 s
+with the same named diagnosis. That is the honest reading of a broken build: the first
+red row states the root cause instead of four later rows reporting mystery timeouts. It
+runs every night rather than behind a flag because the bug class is severe (every server
+frozen until a backend restart) and the ~2 min is cheap next to the ~46 min a single
+undetected wedge cost in run 18. A single run can opt out with
+`npx playwright test --grep-invert event-stream-recovery`.
+
 **Why this matters for the budget.** In run 18 the wedge cost `300 s × 3 retries ×
 4 specs` ≈ **46 minutes**, which pushed the job past its 60-minute
 `timeout-minutes` — GitHub **cancelled** it at 23:34:05, mid-`webhooks`. The last two

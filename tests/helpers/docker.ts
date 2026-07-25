@@ -68,6 +68,60 @@ export function probeServerContainer(serverUuid: string): ContainerProbe {
   return { kind: 'present', state: (state ?? '').trim(), status: (status ?? '').trim() };
 }
 
+/**
+ * The exact `/events` subscription the released backend opens
+ * (`DockerEventHandler.startEventListener()`):
+ *
+ *   client.eventsCmd().withEventTypeFilter("container")
+ *                     .withEventFilter("start", "die", "stop", "pause", "unpause")
+ *
+ * Both filters are applied by the DAEMON, so the backend's socket receives *only* these
+ * actions — notably NOT the `exec_create`/`exec_start`/`exec_die`/`health_status` traffic
+ * a container healthcheck produces. That is what makes a quiet window genuinely quiet on
+ * the wire, and therefore what the idle probe has to measure.
+ */
+const SUBSCRIBED_EVENT_ACTIONS = ['start', 'die', 'stop', 'pause', 'unpause'] as const;
+
+/**
+ * Replay the container events the backend's subscription WOULD have received in
+ * `[sinceEpochSeconds, untilEpochSeconds]`. `docker events` with a past `--until`
+ * returns the historical window and exits, so this never blocks.
+ *
+ * Used by `event-stream-recovery` to prove its idle window really starved the stream:
+ * any event here would have reset the socket's read deadline and invalidated the probe.
+ * Returns `null` when Docker is not queryable from the test process (same graceful
+ * degradation as `probeServerContainer`).
+ */
+export function subscribedContainerEventsBetween(
+  sinceEpochSeconds: number,
+  untilEpochSeconds: number,
+): string[] | null {
+  try {
+    const raw = execFileSync(
+      'docker',
+      [
+        'events',
+        '--since',
+        String(sinceEpochSeconds),
+        '--until',
+        String(untilEpochSeconds),
+        '--filter',
+        'type=container',
+        ...SUBSCRIBED_EVENT_ACTIONS.flatMap((action) => ['--filter', `event=${action}`]),
+        '--format',
+        '{{.Action}} {{.Actor.Attributes.name}}',
+      ],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: DOCKER_PROBE_TIMEOUT_MS },
+    );
+    return raw
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
 /** Human-readable one-liner for error messages. */
 export function describeProbe(probe: ContainerProbe): string {
   switch (probe.kind) {

@@ -45,6 +45,18 @@ for the full roadmap.
 | `access-management` | Access group + limited member permissions → restricted user actually restricted in the UI |
 | `public-dashboard` | Configured public dashboard renders for a fresh **unauthenticated** viewer (`?view=public`) |
 | `settings-design` | General settings (server name) + server-card design persist across reload |
+| `event-stream-recovery` | After a deliberate 90 s idle period with **no** container activity, a stop is still observed by the backend — the regression guard for the lost Docker event stream |
+
+**About `event-stream-recovery`.** It is the one spec that provokes a failure instead of
+waiting to meet one: it brings a throwaway server to RUNNING (proving the backend's
+Docker `/events` stream is alive), does nothing at all for 90 s — twice the 45 s socket
+read timeout the released backend applies to that stream — and then requires a stop to
+reach `STOPPED` within a short budget. It costs ~2 minutes and runs every night, because
+the bug class it guards freezes every server in a transitional state until the backend is
+restarted (see [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)). Against a backend that
+still has the bug it *causes* the wedge, so later specs fail too — fast and with the same
+named diagnosis. Skip it for a run with
+`npx playwright test --grep-invert event-stream-recovery`.
 
 `@extended` specs are tagged, not selected by a file list; `npm run test:extended`
 runs them, `npm run test:core` runs the core set, `npm test` runs everything. The
