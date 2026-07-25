@@ -385,7 +385,12 @@ export class CreateServerPage {
    * Addressed by testid, never by label: the button's text changes per step
    * ("Continue without Template" / "Apply Template" / "Create Server") AND is replaced
    * by a loading label while a request is in flight. `expectedLabel` is asserted
-   * separately so a step-order regression still fails loudly with a readable message.
+   * separately so a step-order regression fails loudly with a readable message.
+   *
+   * Note the label tracks whether a template has been applied, NOT the step index, so
+   * it does not uniquely identify a step: in the no-template flow steps 1 and 2 both
+   * read "Continue without Template". A swap of those two would slip past this check
+   * and is caught instead by step 2's click on `create-field-server_name`.
    */
   private async advance(
     step: string,
