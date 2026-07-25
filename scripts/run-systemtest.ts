@@ -3,7 +3,14 @@
  *
  * Runs the Playwright suite, parses the JSON report into one row per feature
  * (spec file), writes `results/summary.json`, prints a table, and pushes the
- * per-feature results to SigNoz as OTLP-HTTP metrics.
+ * per-feature results to SigNoz as OTLP-HTTP metrics AND as one trace per run.
+ *
+ * Two signals, one push step, because they answer different questions: the metrics
+ * are the time series the dashboard and the alert rules are built on ("has this
+ * feature been red for two nights?"), the trace is the timeline of a single run
+ * ("what ran when, how long did it take, which one failed and why"). The trace id
+ * rides along as a resource attribute on the metrics, so the dashboard's run table
+ * links straight into the run's trace.
  *
  * Three modes, because writing the summary and pushing it happen at different
  * points in the CI job:
@@ -22,8 +29,9 @@
  * is broken. The process exits non-zero ONLY on an infrastructure error:
  *   - Playwright could not produce a parseable report at all, or
  *   - `--push-only` found no usable `results/summary.json` to push, or
- *   - the metric push failed. A broken reporting path must not hide behind a
- *     green job; nobody notices a dashboard that silently stopped updating.
+ *   - a telemetry push (metrics or trace) failed. A broken reporting path must not
+ *     hide behind a green job; nobody notices a dashboard that silently stopped
+ *     updating.
  * `results/summary.json` is written (and uploaded as an artifact) before any push
  * is attempted, so a failed push never costs us the results.
  *
@@ -32,6 +40,7 @@
  * runs and forks (which have no ingest credentials) behave exactly as before.
  */
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -39,13 +48,17 @@ const RESULTS_DIR = path.resolve('results');
 const JSON_REPORT = path.join(RESULTS_DIR, 'playwright-report.json');
 const SUMMARY = path.join(RESULTS_DIR, 'summary.json');
 
-// ── OTLP metric push ─────────────────────────────────────────────────────────
+// ── OTLP push (metrics + trace) ──────────────────────────────────────────────
 /** `service.name` resource attribute — the primary group-by in SigNoz. */
 const SERVICE_NAME = 'cosy-systemtest';
-/** Instrumentation scope the metrics are reported under. */
+/** Instrumentation scope the metrics and spans are reported under. */
 const SCOPE_NAME = 'cosy-systemtest-runner';
 /** OTLP-HTTP metrics path. The ingress matches it with `pathType: Exact`. */
 const OTLP_METRICS_PATH = '/v1/metrics';
+/** OTLP-HTTP traces path — allowed by the same ingress, also `pathType: Exact`. */
+const OTLP_TRACES_PATH = '/v1/traces';
+/** Base UI URL used to print a clickable deep link to the run's trace. */
+const SIGNOZ_UI_URL = 'https://signoz.jannekeipert.de';
 const PUSH_TIMEOUT_MS = 15_000;
 const PUSH_ATTEMPTS = 3;
 const PUSH_RETRY_DELAY_MS = 3_000;
@@ -76,6 +89,17 @@ interface FeatureResult {
   feature: string;
   status: FeatureStatus;
   durationSeconds: number;
+  /**
+   * Wall-clock window the feature occupied, taken from the Playwright report's
+   * per-result `startTime` + `duration`. Optional on purpose: the workflow appends
+   * the `uninstall` row with `jq` and cannot know these, and an older summary has
+   * neither. They exist so the trace can lay the run out on REAL time instead of a
+   * reconstruction — see `planTimeline`.
+   */
+  startedAt?: string;
+  endedAt?: string;
+  /** First error message of a failed feature — the trace's span status message. */
+  errorMessage?: string;
 }
 
 /**
@@ -97,9 +121,16 @@ interface Summary {
 }
 
 // ── Minimal shape of the Playwright JSON report we rely on ───────────────────
+interface PwError {
+  message?: string;
+}
 interface PwTestResult {
   status?: string;
   duration?: number;
+  /** ISO 8601, per JSONReportTestResult — the only real clock the run leaves behind. */
+  startTime?: string;
+  error?: PwError;
+  errors?: PwError[];
 }
 interface PwTest {
   status?: string; // expected | unexpected | flaky | skipped
@@ -151,19 +182,56 @@ function featureName(file: string): string {
   return path.basename(file).replace(/\.spec\.ts$/, '');
 }
 
+/** Terminal escapes make Playwright's message unreadable inside a span attribute. */
+const ANSI_ESCAPE = /\u001b\[[0-9;]*m/g;
+const ERROR_MESSAGE_CHARS = 300;
+
+/** The headline of a Playwright failure: first line, no colour codes, bounded. */
+function firstErrorMessage(test: PwTest): string | undefined {
+  for (const result of test.results ?? []) {
+    const raw = result.error?.message ?? result.errors?.[0]?.message;
+    if (!raw) continue;
+    const cleaned = raw.replace(ANSI_ESCAPE, '').trim().split('\n')[0].trim();
+    if (cleaned) return cleaned.slice(0, ERROR_MESSAGE_CHARS);
+  }
+  return undefined;
+}
+
+interface FeatureAggregate {
+  anyFailed: boolean;
+  anyRan: boolean;
+  durationMs: number;
+  /** Earliest result start / latest result end across the file's tests, in epoch ms. */
+  startMs?: number;
+  endMs?: number;
+  errorMessage?: string;
+}
+
 function parseReport(): FeatureResult[] {
   const report = JSON.parse(fs.readFileSync(JSON_REPORT, 'utf-8')) as PwReport;
   const specs = collectSpecs(report);
 
-  const byFeature = new Map<string, { anyFailed: boolean; anyRan: boolean; durationMs: number }>();
+  const byFeature = new Map<string, FeatureAggregate>();
 
   for (const spec of specs) {
     const feature = featureName(spec.file ?? 'unknown');
     const agg = byFeature.get(feature) ?? { anyFailed: false, anyRan: false, durationMs: 0 };
     for (const test of spec.tests ?? []) {
-      if (test.status === 'unexpected') agg.anyFailed = true;
+      if (test.status === 'unexpected') {
+        agg.anyFailed = true;
+        agg.errorMessage ??= firstErrorMessage(test);
+      }
       if (test.status && test.status !== 'skipped') agg.anyRan = true;
-      for (const r of test.results ?? []) agg.durationMs += r.duration ?? 0;
+      for (const r of test.results ?? []) {
+        agg.durationMs += r.duration ?? 0;
+        // A retried test contributes several results; the feature's window spans
+        // all of them, so take the outermost bounds rather than the first result.
+        const startMs = r.startTime ? Date.parse(r.startTime) : NaN;
+        if (Number.isNaN(startMs)) continue;
+        const endMs = startMs + (r.duration ?? 0);
+        agg.startMs = agg.startMs === undefined ? startMs : Math.min(agg.startMs, startMs);
+        agg.endMs = agg.endMs === undefined ? endMs : Math.max(agg.endMs, endMs);
+      }
     }
     byFeature.set(feature, agg);
   }
@@ -171,7 +239,18 @@ function parseReport(): FeatureResult[] {
   const results: FeatureResult[] = [];
   for (const [feature, agg] of byFeature) {
     const status: FeatureStatus = agg.anyFailed ? 'failed' : agg.anyRan ? 'passed' : 'skipped';
-    results.push({ feature, status, durationSeconds: round1(agg.durationMs / 1000) });
+    results.push({
+      feature,
+      status,
+      durationSeconds: round1(agg.durationMs / 1000),
+      ...(agg.startMs !== undefined && agg.endMs !== undefined
+        ? {
+            startedAt: new Date(agg.startMs).toISOString(),
+            endedAt: new Date(agg.endMs).toISOString(),
+          }
+        : {}),
+      ...(agg.errorMessage ? { errorMessage: agg.errorMessage } : {}),
+    });
   }
   return results.sort((a, b) => a.feature.localeCompare(b.feature));
 }
@@ -221,6 +300,24 @@ function optionalString(record: Record<string, unknown>, key: string, what: stri
   return value;
 }
 
+/**
+ * An optional ISO timestamp. Absent is fine (the `uninstall` row and pre-timeline
+ * summaries have none — the trace falls back to a derived window); present but
+ * unparseable is a malformed file and must not become a nonsense span.
+ */
+function optionalTimestamp(
+  record: Record<string, unknown>,
+  key: string,
+  what: string,
+): string | undefined {
+  const value = optionalString(record, key, what);
+  if (value === null) return undefined;
+  if (Number.isNaN(Date.parse(value))) {
+    throw new Error(`${what}.${key} is not a parseable timestamp: "${value}"`);
+  }
+  return value;
+}
+
 function parseFeature(value: unknown, index: number): FeatureResult {
   const what = `features[${index}]`;
   const record = asRecord(value, what);
@@ -232,10 +329,14 @@ function parseFeature(value: unknown, index: number): FeatureResult {
   if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds)) {
     throw new Error(`${what}.durationSeconds is missing or not a finite number`);
   }
+  const errorMessage = optionalString(record, 'errorMessage', what);
   return {
     feature: requireString(record, 'feature', what),
     status: status as FeatureStatus,
     durationSeconds,
+    startedAt: optionalTimestamp(record, 'startedAt', what),
+    endedAt: optionalTimestamp(record, 'endedAt', what),
+    ...(errorMessage ? { errorMessage } : {}),
   };
 }
 
@@ -282,14 +383,19 @@ function printTable(summary: Summary): void {
 
 // ── OTLP-HTTP/JSON encoding ──────────────────────────────────────────────────
 // Hand-built to avoid pulling the OTel SDK into a repo that otherwise only needs
-// Playwright. Two encoding rules from the proto3 JSON mapping matter, and getting
-// either wrong is how a payload gets a 200 and is then silently dropped:
-//   - int64/fixed64 fields (`timeUnixNano`, `asInt`) are DECIMAL STRINGS;
-//   - `asDouble` is a plain JSON number.
+// Playwright. Three encoding rules from the proto3 JSON mapping matter, and getting
+// any of them wrong is how a payload gets a 200 and is then silently dropped:
+//   - int64/fixed64 fields (`timeUnixNano`, `asInt`, `startTimeUnixNano`,
+//     `endTimeUnixNano`, an attribute's `intValue`) are DECIMAL STRINGS;
+//   - `asDouble` / `doubleValue` are plain JSON numbers;
+//   - trace and span ids are LOWERCASE HEX of the raw bytes — 32 chars (16 bytes)
+//     and 16 chars (8 bytes). Any other length is rejected or, worse, orphaned.
+
+type OtlpAnyValue = { stringValue: string } | { intValue: string } | { doubleValue: number };
 
 interface OtlpAttribute {
   key: string;
-  value: { stringValue: string };
+  value: OtlpAnyValue;
 }
 interface OtlpNumberDataPoint {
   attributes: OtlpAttribute[];
@@ -310,13 +416,48 @@ interface OtlpPayload {
   }[];
 }
 
-/** Response shape we care about: a 2xx can still report dropped points. */
+/** `SPAN_KIND_INTERNAL` — nothing here is a client/server call. */
+const SPAN_KIND_INTERNAL = 1;
+/** `Status.StatusCode`: UNSET is "no claim made", which is what a skip is. */
+const SPAN_STATUS = { unset: 0, ok: 1, error: 2 } as const;
+
+interface OtlpSpan {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  name: string;
+  kind: number;
+  startTimeUnixNano: string;
+  endTimeUnixNano: string;
+  attributes: OtlpAttribute[];
+  status: { code: number; message?: string };
+}
+interface OtlpTracePayload {
+  resourceSpans: {
+    resource: { attributes: OtlpAttribute[] };
+    scopeSpans: { scope: { name: string }; spans: OtlpSpan[] }[];
+  }[];
+}
+
+/** Response shape we care about: a 2xx can still report dropped points/spans. */
 interface OtlpResponse {
-  partialSuccess?: { rejectedDataPoints?: string | number; errorMessage?: string };
+  partialSuccess?: {
+    rejectedDataPoints?: string | number;
+    rejectedSpans?: string | number;
+    errorMessage?: string;
+  };
 }
 
 function attribute(key: string, value: string): OtlpAttribute {
   return { key, value: { stringValue: value } };
+}
+
+function intAttribute(key: string, value: number): OtlpAttribute {
+  return { key, value: { intValue: String(Math.trunc(value)) } };
+}
+
+function doubleAttribute(key: string, value: number): OtlpAttribute {
+  return { key, value: { doubleValue: value } };
 }
 
 function gauge(
@@ -334,8 +475,13 @@ function gauge(
  * "a result must be attributable to a build" convention in CLAUDE.md).
  * Image tags and run URL change per run, so each run adds one series per metric;
  * at one nightly run that is a bounded, deliberate cost.
+ *
+ * `cosy.systemtest.trace_id` is the same on the metrics and on the trace, which is
+ * the whole point: the dashboard's run table groups by it, so a row there can link
+ * into `/trace/<id>` in SigNoz. It shares the run URL's cardinality profile (one new
+ * value per run), so it costs nothing that was not already being paid.
  */
-function resourceAttributes(summary: Summary): OtlpAttribute[] {
+function resourceAttributes(summary: Summary, traceId: string): OtlpAttribute[] {
   const attributes = [
     attribute('service.name', SERVICE_NAME),
     // House convention is a prod/staging split via `deployment.environment`; here
@@ -343,6 +489,7 @@ function resourceAttributes(summary: Summary): OtlpAttribute[] {
     attribute('deployment.environment', summary.channel),
     attribute('cosy.backend.image_tag', summary.versions.backend ?? 'unknown'),
     attribute('cosy.frontend.image_tag', summary.versions.frontend ?? 'unknown'),
+    attribute('cosy.systemtest.trace_id', traceId),
   ];
   // Absent outside GitHub Actions — omit rather than invent a placeholder link.
   if (summary.runUrl) attributes.push(attribute('cosy.systemtest.run_url', summary.runUrl));
@@ -360,7 +507,7 @@ function resourceAttributes(summary: Summary): OtlpAttribute[] {
  * `feature_skipped` (0 when it ran), so the series never disappears and "this
  * feature stopped running" is itself alertable.
  */
-export function buildMetricsPayload(summary: Summary): OtlpPayload {
+export function buildMetricsPayload(summary: Summary, traceId: string): OtlpPayload {
   // Milliseconds × 1e6 exceeds Number.MAX_SAFE_INTEGER — must go through BigInt.
   const observedAtMs = Date.parse(summary.generatedAt);
   const timeUnixNano = (BigInt(observedAtMs) * 1_000_000n).toString();
@@ -423,7 +570,7 @@ export function buildMetricsPayload(summary: Summary): OtlpPayload {
   return {
     resourceMetrics: [
       {
-        resource: { attributes: resourceAttributes(summary) },
+        resource: { attributes: resourceAttributes(summary, traceId) },
         // A metric with no data points carries no information; drop it (happens
         // when literally every feature skipped, e.g. a local run with no install).
         scopeMetrics: [
@@ -432,6 +579,205 @@ export function buildMetricsPayload(summary: Summary): OtlpPayload {
             metrics: metrics.filter((m) => m.gauge.dataPoints.length > 0),
           },
         ],
+      },
+    ],
+  };
+}
+
+// ── Trace: one run = one trace, one feature = one span ───────────────────────
+
+/**
+ * OTLP ids are raw bytes rendered as lowercase hex: 16 bytes (32 chars) for a trace,
+ * 8 bytes (16 chars) for a span. `crypto.randomBytes` rather than `Math.random`,
+ * which is neither uniform nor collision-safe at these widths and would eventually
+ * merge two runs into one trace.
+ */
+function newTraceId(): string {
+  return randomBytes(16).toString('hex');
+}
+
+function newSpanId(): string {
+  return randomBytes(8).toString('hex');
+}
+
+function toUnixNano(epochMs: number): string {
+  // Milliseconds × 1e6 exceeds Number.MAX_SAFE_INTEGER — must go through BigInt.
+  return (BigInt(Math.round(epochMs)) * 1_000_000n).toString();
+}
+
+/** Where one feature sits on the run's timeline, and whether that is measured. */
+interface FeatureWindow {
+  feature: FeatureResult;
+  startMs: number;
+  endMs: number;
+  /** true = real Playwright clock; false = reconstructed, see `planTimeline`. */
+  measured: boolean;
+}
+
+function measuredWindow(feature: FeatureResult): { startMs: number; endMs: number } | null {
+  if (!feature.startedAt || !feature.endedAt) return null;
+  const startMs = Date.parse(feature.startedAt);
+  const endMs = Date.parse(feature.endedAt);
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return null;
+  // A window that ends before it starts is nonsense; clamp instead of emitting a
+  // negative-duration span, which renders as garbage in the trace view.
+  return { startMs, endMs: Math.max(startMs, endMs) };
+}
+
+function durationMs(feature: FeatureResult): number {
+  return feature.status === 'skipped' ? 0 : Math.max(0, Math.round(feature.durationSeconds * 1000));
+}
+
+/**
+ * Place every feature on a timeline.
+ *
+ * Rows that carry `startedAt`/`endedAt` — every spec row, since the runner copies
+ * them out of the Playwright report — are placed on the REAL clock; nothing about
+ * their position is invented.
+ *
+ * Rows without them are reconstructed and marked `cosy.systemtest.timing=derived`
+ * on the span, so nobody reads a made-up position as a measurement. In practice
+ * that is exactly one row, `uninstall`, which the workflow appends after the suite:
+ * it is laid out sequentially starting at the last measured end, which is truthful
+ * (it really does run after the suite) even though its exact start is not recorded.
+ * If NOTHING is measured (a pre-timeline summary), the whole run is laid out back to
+ * back ending at `generatedAt` — the suite runs serially in CI (`workers: 1`), so a
+ * sequential layout is the honest reconstruction, but it is still a reconstruction.
+ */
+function planTimeline(summary: Summary): FeatureWindow[] {
+  const measured = summary.features.map((feature) => ({
+    feature,
+    window: measuredWindow(feature),
+  }));
+  const measuredEnds = measured
+    .map((m) => m.window?.endMs)
+    .filter((end): end is number => end !== undefined);
+  const derivedTotalMs = measured
+    .filter((m) => !m.window)
+    .reduce((sum, m) => sum + durationMs(m.feature), 0);
+
+  let cursor =
+    measuredEnds.length > 0
+      ? Math.max(...measuredEnds)
+      : Date.parse(summary.generatedAt) - derivedTotalMs;
+
+  return measured.map(({ feature, window }) => {
+    if (window) return { feature, ...window, measured: true };
+    const startMs = cursor;
+    cursor = startMs + durationMs(feature);
+    return { feature, startMs, endMs: cursor, measured: false };
+  });
+}
+
+/**
+ * Span name for a feature. A skipped feature gets a `[skipped]` suffix on purpose:
+ * its span is zero-length, and a zero-length span with a green (or no) status is
+ * exactly the thing that could be misread as "it ran and was fast". The suffix
+ * makes the skip readable in the trace's span list without opening the span, and
+ * `feature`/`status` attributes stay clean for filtering.
+ */
+function spanName(feature: FeatureResult): string {
+  return feature.status === 'skipped' ? `${feature.feature} [skipped]` : feature.feature;
+}
+
+/**
+ * Span status, mirroring the metric convention "never report a skip as a pass":
+ *   - failed  → ERROR with the Playwright message (or a generic one for rows the
+ *               workflow appended, which carry no message).
+ *   - passed  → OK.
+ *   - skipped → UNSET. Not OK: nothing was verified, so no claim is made.
+ */
+function spanStatus(feature: FeatureResult): { code: number; message?: string } {
+  if (feature.status === 'failed') {
+    return {
+      code: SPAN_STATUS.error,
+      message: feature.errorMessage ?? `feature "${feature.feature}" failed`,
+    };
+  }
+  return { code: feature.status === 'passed' ? SPAN_STATUS.ok : SPAN_STATUS.unset };
+}
+
+/**
+ * Build the trace for one run: a root span covering the whole run, one child span
+ * per feature. The trace answers what the metrics cannot — the ORDER and the shape
+ * of a single run: which feature ran when, how long each took, which failed and with
+ * what message.
+ */
+export function buildTracePayload(summary: Summary, traceId: string): OtlpTracePayload {
+  const generatedAtMs = Date.parse(summary.generatedAt);
+  const windows = planTimeline(summary);
+  const rootSpanId = newSpanId();
+
+  const featureSpans: OtlpSpan[] = windows.map(({ feature, startMs, endMs, measured }) => ({
+    traceId,
+    spanId: newSpanId(),
+    parentSpanId: rootSpanId,
+    name: spanName(feature),
+    kind: SPAN_KIND_INTERNAL,
+    startTimeUnixNano: toUnixNano(startMs),
+    endTimeUnixNano: toUnixNano(endMs),
+    attributes: [
+      attribute('feature', feature.feature),
+      attribute('channel', summary.channel),
+      attribute('status', feature.status),
+      // The number the metric reports, so a span can be reconciled with the
+      // dashboard: for a retried feature it is the SUM of the attempts and thus
+      // smaller than the span's wall clock.
+      doubleAttribute('cosy.systemtest.duration_seconds', feature.durationSeconds),
+      attribute('cosy.systemtest.timing', measured ? 'measured' : 'derived'),
+    ],
+    status: spanStatus(feature),
+  }));
+
+  const counts = {
+    total: summary.features.length,
+    passed: summary.features.filter((f) => f.status === 'passed').length,
+    failed: summary.features.filter((f) => f.status === 'failed').length,
+    skipped: summary.features.filter((f) => f.status === 'skipped').length,
+  };
+
+  // The run spans everything it contains; with no features at all (an empty
+  // summary) it collapses onto `generatedAt` rather than inventing a window.
+  const rootStartMs =
+    windows.length > 0 ? Math.min(...windows.map((w) => w.startMs)) : generatedAtMs;
+  const rootEndMs = windows.length > 0 ? Math.max(...windows.map((w) => w.endMs)) : generatedAtMs;
+
+  const rootSpan: OtlpSpan = {
+    traceId,
+    spanId: rootSpanId,
+    // The channel is in the NAME (not just an attribute) because SigNoz's trace
+    // list shows the root span name: `release` vs `staging` is then readable
+    // without opening the trace. Two values only — no cardinality problem.
+    name: `cosy-systemtest run (${summary.channel})`,
+    kind: SPAN_KIND_INTERNAL,
+    startTimeUnixNano: toUnixNano(rootStartMs),
+    endTimeUnixNano: toUnixNano(rootEndMs),
+    attributes: [
+      attribute('channel', summary.channel),
+      intAttribute('cosy.systemtest.features.total', counts.total),
+      intAttribute('cosy.systemtest.features.passed', counts.passed),
+      intAttribute('cosy.systemtest.features.failed', counts.failed),
+      intAttribute('cosy.systemtest.features.skipped', counts.skipped),
+    ],
+    status:
+      counts.failed > 0
+        ? {
+            code: SPAN_STATUS.error,
+            message: `${counts.failed} of ${counts.total} features failed: ${summary.features
+              .filter((f) => f.status === 'failed')
+              .map((f) => f.feature)
+              .join(', ')}`,
+          }
+        : { code: SPAN_STATUS.ok },
+  };
+
+  return {
+    resourceSpans: [
+      {
+        // Identical to the metrics' resource, so both signals describe the same
+        // run of the same service and SigNoz can relate them.
+        resource: { attributes: resourceAttributes(summary, traceId) },
+        scopeSpans: [{ scope: { name: SCOPE_NAME }, spans: [rootSpan, ...featureSpans] }],
       },
     ],
   };
@@ -449,12 +795,13 @@ class PushError extends Error {
 }
 
 /**
- * A 2xx is not proof the data landed: OTLP reports dropped points in
- * `partialSuccess.rejectedDataPoints`. Treat any rejection as a failed push —
- * otherwise a malformed payload no-ops in silence, which is the exact failure
- * mode this whole reporting path exists to avoid.
+ * A 2xx is not proof the data landed: OTLP reports dropped items in
+ * `partialSuccess` — `rejectedDataPoints` for metrics, `rejectedSpans` for traces.
+ * Treat any rejection as a failed push — otherwise a malformed payload no-ops in
+ * silence, which is the exact failure mode this whole reporting path exists to
+ * avoid.
  */
-function assertNothingRejected(responseBody: string): void {
+function assertNothingRejected(responseBody: string, itemNoun: string): void {
   if (!responseBody.trim()) return;
   let parsed: OtlpResponse;
   try {
@@ -462,17 +809,24 @@ function assertNothingRejected(responseBody: string): void {
   } catch {
     return; // Not JSON, so nothing to assert — the 2xx stands.
   }
-  const rejected = Number(parsed.partialSuccess?.rejectedDataPoints ?? 0);
+  const rejected =
+    Number(parsed.partialSuccess?.rejectedDataPoints ?? 0) +
+    Number(parsed.partialSuccess?.rejectedSpans ?? 0);
   if (rejected > 0) {
     throw new PushError(
-      `collector accepted the request but rejected ${rejected} data points: ` +
+      `collector accepted the request but rejected ${rejected} ${itemNoun}: ` +
         `${parsed.partialSuccess?.errorMessage || '(no error message)'}`,
       false,
     );
   }
 }
 
-async function postOtlp(endpoint: string, basicAuth: string, body: string): Promise<void> {
+async function postOtlp(
+  endpoint: string,
+  basicAuth: string,
+  body: string,
+  itemNoun: string,
+): Promise<void> {
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Basic ${basicAuth}` },
@@ -489,18 +843,63 @@ async function postOtlp(endpoint: string, basicAuth: string, body: string): Prom
       retryable,
     );
   }
-  assertNothingRejected(text);
+  assertNothingRejected(text, itemNoun);
+}
+
+/** One OTLP signal, ready to POST. */
+interface OtlpSignal {
+  /** OTLP-HTTP path, e.g. `/v1/metrics`. */
+  path: string;
+  /** What the payload carries, for logs and rejection messages ("spans", …). */
+  itemNoun: string;
+  body: string;
+  items: number;
+}
+
+/** Push one signal, retrying only what a retry can fix. */
+async function pushSignal(signal: OtlpSignal, ingestUrl: string, basicAuth: string): Promise<void> {
+  const endpoint = `${ingestUrl}${signal.path}`;
+  let lastError = 'unknown error';
+  for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt++) {
+    try {
+      await postOtlp(endpoint, basicAuth, signal.body, signal.itemNoun);
+      console.log(`Pushed ${signal.items} ${signal.itemNoun} to ${endpoint} (attempt ${attempt}).`);
+      return;
+    } catch (err) {
+      lastError = describeError(err);
+      const retryable = !(err instanceof PushError) || err.retryable;
+      if (!retryable || attempt === PUSH_ATTEMPTS) break;
+      console.error(
+        `OTLP push attempt ${attempt}/${PUSH_ATTEMPTS} to ${endpoint} failed: ${lastError} — ` +
+          `retrying in ${PUSH_RETRY_DELAY_MS} ms.`,
+      );
+      await sleep(PUSH_RETRY_DELAY_MS);
+    }
+  }
+  throw new Error(`OTLP push to ${endpoint} failed: ${lastError}`);
+}
+
+function countDataPoints(payload: OtlpPayload): number {
+  return payload.resourceMetrics[0].scopeMetrics[0].metrics.reduce(
+    (sum, metric) => sum + metric.gauge.dataPoints.length,
+    0,
+  );
 }
 
 type PushOutcome = 'pushed' | 'skipped';
 
 /**
- * Push the per-feature results to SigNoz over authenticated OTLP-HTTP.
+ * Push this run's telemetry to SigNoz over authenticated OTLP-HTTP: the metrics
+ * (the dashboard's and the alerts' time series) and the trace (this run's timeline).
  *
  * Returns `'skipped'` (no credentials configured — local/fork runs) or `'pushed'`.
  * Throws on a genuine push failure; the caller turns that into a non-zero exit.
+ *
+ * Both signals are attempted even if the first one fails, and the errors are
+ * reported together: half the picture is better than none, and a failure in either
+ * still fails the job.
  */
-export async function pushMetrics(summary: Summary): Promise<PushOutcome> {
+export async function pushTelemetry(summary: Summary): Promise<PushOutcome> {
   const ingestUrl = optionalEnv('OTEL_INGEST_URL');
   const user = optionalEnv('OTEL_INGEST_USER');
   const password = optionalEnv('OTEL_INGEST_PASSWORD');
@@ -514,35 +913,44 @@ export async function pushMetrics(summary: Summary): Promise<PushOutcome> {
     return 'skipped';
   }
 
-  const endpoint = `${ingestUrl.replace(/\/+$/, '')}${OTLP_METRICS_PATH}`;
-  const payload = buildMetricsPayload(summary);
-  const body = JSON.stringify(payload);
-  const dataPoints = payload.resourceMetrics[0].scopeMetrics[0].metrics.reduce(
-    (sum, metric) => sum + metric.gauge.dataPoints.length,
-    0,
-  );
+  // One id for both signals: the metrics carry it as a resource attribute so the
+  // dashboard can link into the trace it identifies.
+  const traceId = newTraceId();
+  const metricsPayload = buildMetricsPayload(summary, traceId);
+  const tracePayload = buildTracePayload(summary, traceId);
+  const signals: OtlpSignal[] = [
+    {
+      path: OTLP_METRICS_PATH,
+      itemNoun: 'data points',
+      body: JSON.stringify(metricsPayload),
+      items: countDataPoints(metricsPayload),
+    },
+    {
+      path: OTLP_TRACES_PATH,
+      itemNoun: 'spans',
+      body: JSON.stringify(tracePayload),
+      items: tracePayload.resourceSpans[0].scopeSpans[0].spans.length,
+    },
+  ];
+
   // Never build the credentials into a shell string or log them; only the
   // endpoint is ever printed.
   const basicAuth = Buffer.from(`${user}:${password}`).toString('base64');
+  const base = ingestUrl.replace(/\/+$/, '');
 
-  let lastError = 'unknown error';
-  for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt++) {
+  console.log(`\nTrace id for this run: ${traceId}`);
+  console.log(`Trace in SigNoz: ${SIGNOZ_UI_URL}/trace/${traceId}`);
+
+  const failures: string[] = [];
+  for (const signal of signals) {
     try {
-      await postOtlp(endpoint, basicAuth, body);
-      console.log(`\nPushed ${dataPoints} data points to ${endpoint} (attempt ${attempt}).`);
-      return 'pushed';
+      await pushSignal(signal, base, basicAuth);
     } catch (err) {
-      lastError = describeError(err);
-      const retryable = !(err instanceof PushError) || err.retryable;
-      if (!retryable || attempt === PUSH_ATTEMPTS) break;
-      console.error(
-        `OTLP push attempt ${attempt}/${PUSH_ATTEMPTS} failed: ${lastError} — ` +
-          `retrying in ${PUSH_RETRY_DELAY_MS} ms.`,
-      );
-      await sleep(PUSH_RETRY_DELAY_MS);
+      failures.push(describeError(err));
     }
   }
-  throw new Error(`OTLP push to ${endpoint} failed: ${lastError}`);
+  if (failures.length > 0) throw new Error(failures.join(' | '));
+  return 'pushed';
 }
 
 /**
@@ -658,19 +1066,19 @@ async function main(): Promise<void> {
 
   if (!options.push) {
     console.log(
-      '\nINFO: --no-push — results written, metrics NOT pushed. In CI the push runs in a ' +
-        'later step, after the workflow appended the `uninstall` row; see ' +
+      '\nINFO: --no-push — results written, nothing pushed (no metrics, no trace). In CI the ' +
+        'push runs in a later step, after the workflow appended the `uninstall` row; see ' +
         '.github/workflows/systemtest.yml.',
     );
     process.exit(0);
   }
 
   try {
-    await pushMetrics(summary);
+    await pushTelemetry(summary);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(
-      `::error::Systemtest metric push FAILED — the SigNoz dashboard will go stale ` +
+      `::error::Systemtest telemetry push FAILED — the SigNoz dashboard will go stale ` +
         `for this run. ${message}`,
     );
     console.error(

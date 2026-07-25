@@ -1,7 +1,7 @@
 {
   "uuid": "019f8a41-7c30-7b52-9c04-6c0a1f2ee901",
   "title": "Cosy Systemtest",
-  "description": "End-to-end systemtest of the Cosy game-server platform: every night a GitHub-hosted runner installs Cosy from scratch with install_cosy.sh and drives 20 features through the real UI. One gauge sample per feature per run reaches SigNoz over OTLP.\n\nREAD FIRST \u2014 this dashboard is EXPECTED to show 2 reds and 1 skip. EXPECTED REDS: `templates` and `server-from-template` fail on a confirmed bug in the RELEASED product (v1.0.3 strict-compares a string template game_id against a numeric games-API id, so the wizard never lists a template). EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md\n\nChannels: `release` = the installer exactly as published (nightly 02:30 UTC + release tags); `staging` = the same suite against freshly pushed sha-<short> images.\n\nEvery query wraps its metric in last_over_time(...[26h]) because a nightly publishes one sample per day and Prometheus' 5-minute lookback would otherwise blank the whole dashboard minutes after a run. Source of truth for this JSON: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/signoz-dashboard.json\n\nNOTE (2026-07-25): the metrics were renamed to the cosy_platform_ prefix on that day. The release-channel panels stay empty until the first nightly publishes under the new names; earlier runs are still in SigNoz under cosy_systemtest_*, which now belongs exclusively to the unrelated Cosy Domain Provider systemtest \u2014 do not query it here.",
+  "description": "End-to-end systemtest of the Cosy game-server platform: every night a GitHub-hosted runner installs Cosy from scratch with install_cosy.sh and drives 20 features through the real UI. One gauge sample per feature per run reaches SigNoz over OTLP.\n\nREAD FIRST \u2014 this dashboard is EXPECTED to show 2 reds and 1 skip. EXPECTED REDS: `templates` and `server-from-template` fail on a confirmed bug in the RELEASED product (v1.0.3 strict-compares a string template game_id against a numeric games-API id, so the wizard never lists a template). EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md\n\nChannels: `release` = the installer exactly as published (nightly 02:30 UTC + release tags); `staging` = the same suite against freshly pushed sha-<short> images.\n\nEvery query wraps its metric in last_over_time(...[26h]) because a nightly publishes one sample per day and Prometheus' 5-minute lookback would otherwise blank the whole dashboard minutes after a run. Source of truth for this JSON: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/signoz-dashboard.json\n\nNOTE (2026-07-25): the metrics were renamed to the cosy_platform_ prefix on that day. The release-channel panels stay empty until the first nightly publishes under the new names; earlier runs are still in SigNoz under cosy_systemtest_*, which now belongs exclusively to the unrelated Cosy Domain Provider systemtest \u2014 do not query it here.\n\nTRACES (since 2026-07-25): every run also emits ONE trace \u2014 a root span `cosy-systemtest run (<channel>)` with one child span per feature, carrying the same resource attributes as the metrics. Use it to see the run as a timeline instead of a matrix. Get there from the \"Runs in window\" table (row \u2192 \"Open this run's trace\"), or search the Traces explorer for service.name=cosy-systemtest. A skipped feature appears as a ZERO-LENGTH span named `<feature> [skipped]` with span status UNSET \u2014 never OK, so a skip can never read as a pass.",
   "tags": [
     "cosy",
     "systemtest",
@@ -1978,8 +1978,8 @@
     },
     {
       "id": "t-runs",
-      "title": "Runs in window \u2014 image tags & GitHub run link",
-      "description": "One row per run in the dashboard's time range, carrying the resource attributes every data point is tagged with. A red cell in the matrix above is attributable to the backend/frontend image tag here, and the run URL leads to the Playwright HTML report, traces and videos. (Builder query rather than PromQL: the attribute keys contain dots, which PromQL label names cannot express.)",
+      "title": "Runs in window \u2014 image tags, GitHub run link & trace",
+      "description": "One row per run in the dashboard's time range, carrying the resource attributes every data point is tagged with. A red cell in the matrix above is attributable to the backend/frontend image tag here; the run URL leads to the Playwright HTML report, traces and videos, and cosy.systemtest.trace_id identifies the OTLP trace the same run emitted \u2014 the per-feature timeline (what ran when, how long, which failed and why).\n\nDRILL-DOWN: click a row and choose \"Open this run's trace\" to jump to /trace/<id> in SigNoz. The id is also shown as a column, so it can be pasted into the Traces explorer's trace-id search if the context menu is unavailable.\n\n(Builder query rather than PromQL: the attribute keys contain dots, which PromQL label names cannot express.)",
       "panelTypes": "table",
       "query": {
         "id": "t-runs-q",
@@ -2026,6 +2026,11 @@
                   "dataType": "string",
                   "key": "cosy.systemtest.run_url",
                   "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "cosy.systemtest.trace_id",
+                  "type": "tag"
                 }
               ],
               "having": [],
@@ -2054,7 +2059,13 @@
       "decimalPrecision": 0,
       "timePreferance": "GLOBAL_TIME",
       "contextLinks": {
-        "linksData": []
+        "linksData": [
+          {
+            "id": "open-run-trace",
+            "label": "Open this run's trace",
+            "url": "/trace/{{_cosy.systemtest.trace_id}}"
+          }
+        ]
       },
       "selectedLogFields": [
         {

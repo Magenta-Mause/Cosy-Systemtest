@@ -201,11 +201,12 @@ jobs:
       # Metrics-are-truth: this step exits 0 even when features fail. It fails only
       # on an infrastructure error — Playwright produced no parseable report.
       #
-      # `--no-push`: this step only WRITES results/summary.json. The push happens in
-      # the "Push results to SigNoz" step below, after the teardown assertion appended
-      # the `uninstall` row — otherwise the dashboard would see 19 of 20 features. The
-      # summary is written whether features pass or fail, so that later step always
-      # has something to push. No ingest credentials are needed here.
+      # `--no-push`: this step only WRITES results/summary.json (including the real
+      # per-feature start/end timestamps the trace is laid out on). The push happens
+      # in the "Push results to SigNoz" step below, after the teardown assertion
+      # appended the `uninstall` row — otherwise the dashboard and the trace would see
+      # 19 of 20 features. The summary is written whether features pass or fail, so
+      # that later step always has something to push. No ingest credentials here.
       - name: Run systemtest suite
         run: npx tsx scripts/run-systemtest.ts --no-push
 
@@ -324,7 +325,9 @@ jobs:
 
       # Push LAST, so the payload contains the complete matrix — every spec row plus
       # the `uninstall` row the teardown assertion just appended. Reads the summary the
-      # suite step wrote; runs no tests.
+      # suite step wrote; runs no tests. Two signals go out here: the per-feature
+      # metrics AND one trace for the run (root span + one span per feature), sharing a
+      # trace id that also rides on the metrics so the dashboard can link to it.
       #
       # `if: always()`, because a red suite is exactly when the dashboard must update.
       # A failed push is deliberately loud (non-zero + `::error::`): a reporting path

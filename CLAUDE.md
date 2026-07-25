@@ -12,9 +12,9 @@ npm install          # Node >= 22
 npm test             # whole suite (chromium)
 npm run test:core    # @core specs (grep tag)
 npm run typecheck    # tsc --noEmit
-npm run systemtest   # runner → results/summary.json + push (exits 0 even on red tests)
+npm run systemtest   # runner → results/summary.json + push metrics & trace (exits 0 even on red tests)
 npm run systemtest:nopush  # same, but write only — no OTLP push (what CI's suite step runs)
-npm run systemtest:push    # push an existing results/summary.json; runs no tests
+npm run systemtest:push    # push an existing results/summary.json (metrics + trace); runs no tests
 npm run report       # open last HTML report
 npx playwright test --list   # lists all specs even with no install present
 ```
@@ -31,14 +31,15 @@ npx playwright test --list   # lists all specs even with no install present
 | `COSY_CHANNEL` | Channel label in `results/summary.json`; the workflow sets `staging` when a manual run pinned an image tag, else `release` | `release` |
 | `COSY_BACKEND_TAG` | Installed backend image tag, written to `summary.json` → `versions.backend` (workflow reads it back out of the installed `.env`) | — (`null` in the summary) |
 | `COSY_FRONTEND_TAG` | Installed frontend image tag → `versions.frontend` | — (`null` in the summary) |
-| `OTEL_INGEST_URL` | Base URL of the authenticated OTLP-HTTP ingest (SigNoz collector); the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics`. CI sets `https://otel-ingest.jannekeipert.de` (overridable via the `OTEL_INGEST_URL` repo variable) | — (push skipped) |
+| `OTEL_INGEST_URL` | Base URL of the authenticated OTLP-HTTP ingest (SigNoz collector); the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics` **and** `${OTEL_INGEST_URL}/v1/traces`. CI sets `https://otel-ingest.jannekeipert.de` (overridable via the `OTEL_INGEST_URL` repo variable) | — (push skipped) |
 | `OTEL_INGEST_USER` | HTTP Basic user for the ingest (GitHub secret) | — (push skipped) |
 | `OTEL_INGEST_PASSWORD` | HTTP Basic password for the ingest (GitHub secret) | — (push skipped) |
 | `CI` | CI reporters + retries | — |
 
 **The push is all-or-nothing on config:** unless all three `OTEL_INGEST_*` are set and
 non-empty, the runner logs one INFO line and exits 0 — local runs and forks are
-unaffected. When they *are* set, a failed push exits **1** (see convention 8).
+unaffected. When they *are* set, both signals (metrics + the run's trace) go out and a
+failed push of *either* exits **1** (see convention 8).
 
 ## Hard conventions (do not break)
 
@@ -66,7 +67,8 @@ unaffected. When they *are* set, a failed push exits **1** (see convention 8).
 8. **Runner semantics:** `scripts/run-systemtest.ts` exits 0 even when features fail
    (metrics are truth); it fails only on infrastructure errors — no parseable report,
    a `--push-only` run with no usable `results/summary.json`, or a **failed OTLP
-   push**. A push that breaks quietly would leave the dashboard stale with nobody
+   push of either signal** (metrics or trace; both are attempted, then the failures
+   are reported together). A push that breaks quietly would leave the dashboard stale with nobody
    noticing, so it is loud and red. `results/summary.json` is always written *before*
    any push, so a failed push never costs us the results.
    **Writing and pushing are separate modes:** `--no-push` (run + write only) and
@@ -112,8 +114,36 @@ unaffected. When they *are* set, a failed push exits **1** (see convention 8).
     must wrap its metric in `last_over_time(...[26h])`: a nightly publishes one sample
     per day and Prometheus' 5-minute lookback would otherwise blank the dashboard
     minutes after a run. Alert rules live in the cluster deployment repo under
-    `infrastructure/signoz-alerts/`. See the README's "The SigNoz dashboard" section.
-14. **Known reds are excluded from paging, never from the suite.** `templates` and
+    `infrastructure/signoz-alerts/`. The "Runs in window" table is the drill-down panel:
+    it groups by `cosy.systemtest.trace_id` and carries a SigNoz context link
+    (`contextLinks.linksData`, url `/trace/{{_cosy.systemtest.trace_id}}`) — do not drop
+    either, they are the only path from the dashboard into a run's trace. See the
+    README's "The SigNoz dashboard" section.
+14. **One run = one trace, and a skip is never a green span.** The same `--push-only`
+    step that pushes the metrics also POSTs one OTLP trace to `/v1/traces`: a root span
+    `cosy-systemtest run (<channel>)` (ERROR if any feature failed, attributes
+    `cosy.systemtest.features.total/.passed/.failed/.skipped`) with **one child span per
+    feature** (`feature`, `channel`, `status`, `cosy.systemtest.duration_seconds`,
+    `cosy.systemtest.timing`; failed → ERROR + the Playwright message, passed → OK).
+    Rules that must not be broken:
+    - **A skipped feature is a ZERO-LENGTH span named `<feature> [skipped]` with span
+      status UNSET** — not OK (that would read as verified), not ERROR (nothing is
+      broken), not omitted (a missing span is indistinguishable from a feature dropped
+      from the suite). Same reasoning as convention 9 for the metrics.
+    - **Timing is measured where it can be.** `parseReport` copies each spec's real
+      `startTime`/`duration` from the Playwright JSON report into `summary.json`
+      (`startedAt`/`endedAt`), and the spans are laid out on those (`timing=measured`).
+      Rows without them — in practice only the `jq`-appended `uninstall` — are laid out
+      sequentially after the last measured end and marked `timing=derived`. Never present
+      a reconstructed position as measured; if you add a row, either give it real
+      timestamps or leave it derived.
+    - **Ids come from `crypto.randomBytes`** (16 bytes trace / 8 bytes span, lowercase
+      hex), and every feature span sets `parentSpanId` to the root's id — a wrong id
+      width or a missing parent shows up in SigNoz as orphan spans, not as an error.
+    - The trace id is pushed as the metrics resource attribute
+      `cosy.systemtest.trace_id`, which is what lets the dashboard link a run's row to
+      `/trace/<id>`. Keep the two in sync — they are generated once per push.
+15. **Known reds are excluded from paging, never from the suite.** `templates` and
     `server-from-template` (released product bug) and `rcon` (quarantined) are excluded
     from the alert rules and from the dashboard's "Unexpected failures" tile — a rule
     that fires every night forever gets muted and then misses the real regression. They

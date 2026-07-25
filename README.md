@@ -9,7 +9,8 @@ matrix.
 **Phase 3** (this state): the full feature matrix, reported to SigNoz. Phase 1
 delivered the install → core lifecycle → uninstall path (`@core`); Phase 2 added the
 remaining feature specs (`@extended`); Phase 3 pushes the per-feature results as OTLP
-metrics (see [Reporting](#reporting-what-lands-in-signoz)). Nightly + manual trigger,
+metrics plus one trace per run (see [Reporting](#reporting-what-lands-in-signoz)).
+Nightly + manual trigger,
 results also kept as a GitHub artifact; a manual run can pin a specific
 backend/frontend image tag to verify a fix before release (recorded as the `staging`
 channel — see [below](#testing-a-specific-not-yet-released-build)). The automatic
@@ -85,7 +86,7 @@ npm run test:extended       # run @extended-tagged specs (the rest of the matrix
 npm run typecheck           # tsc --noEmit
 npm run systemtest          # run the suite via the runner → results/summary.json, then push
 npm run systemtest:nopush   # run + write results/summary.json only (what CI's suite step does)
-npm run systemtest:push     # push an existing results/summary.json — runs no tests
+npm run systemtest:push     # push an existing results/summary.json (metrics + trace) — runs no tests
 npm run report              # open the last HTML report
 ```
 
@@ -119,7 +120,7 @@ listable and typecheckable on any machine.
 | `COSY_CHANNEL` | Channel label written into `results/summary.json` (`release`, or `staging` when a run pinned an image tag) | `release` |
 | `COSY_BACKEND_TAG` | Installed backend image tag, recorded as `versions.backend` in the summary | — (`null`) |
 | `COSY_FRONTEND_TAG` | Installed frontend image tag, recorded as `versions.frontend` in the summary | — (`null`) |
-| `OTEL_INGEST_URL` | Base URL of the OTLP-HTTP ingest; the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics` | — (push skipped) |
+| `OTEL_INGEST_URL` | Base URL of the OTLP-HTTP ingest; the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics` and `${OTEL_INGEST_URL}/v1/traces` | — (push skipped) |
 | `OTEL_INGEST_USER` | HTTP Basic user for the ingest | — (push skipped) |
 | `OTEL_INGEST_PASSWORD` | HTTP Basic password for the ingest | — (push skipped) |
 | `CI` | Enables CI reporters (github/html/json) + retries | — |
@@ -130,10 +131,10 @@ listable and typecheckable on any machine.
 checkout → Node 22 → `npm ci` → `playwright install --with-deps chromium` → install
 Cosy → poll health (≤10 min) → run the suite (`--no-push`, writes
 `results/summary.json`) → capture diagnostics → uninstall + assert clean teardown
-(appends the `uninstall` row) → **push metrics to SigNoz** (`--push-only`) → upload
-the report and results. The runner exits 0 even when features fail (metrics are
-truth); the job only goes red on infrastructure errors — including a failed metric
-push (see [Reporting](#reporting-what-lands-in-signoz)). The ingest URL comes from
+(appends the `uninstall` row) → **push metrics + the run's trace to SigNoz**
+(`--push-only`) → upload the report and results. The runner exits 0 even when features
+fail (metrics are truth); the job only goes red on infrastructure errors — including a
+failed push (see [Reporting](#reporting-what-lands-in-signoz)). The ingest URL comes from
 the `OTEL_INGEST_URL` repo variable (defaulting to
 `https://otel-ingest.jannekeipert.de`) and the credentials from the
 `OTEL_INGEST_USER` / `OTEL_INGEST_PASSWORD` repo secrets, passed to the push step via
@@ -174,8 +175,18 @@ result says which build it tested.
 
 Once the suite has run *and* the workflow has asserted the teardown, the runner POSTs
 the complete results — every spec row plus the workflow's `uninstall` row — to the
-authenticated OTLP-HTTP ingest (`${OTEL_INGEST_URL}/v1/metrics`, HTTP Basic) which
-fronts the SigNoz collector. All five metrics are gauges, written once per run:
+authenticated OTLP-HTTP ingest (HTTP Basic) which fronts the SigNoz collector. **Two
+signals go out per run**, from the same `--push-only` step and sharing one trace id:
+
+- **metrics** → `${OTEL_INGEST_URL}/v1/metrics` — the time series the dashboard and the
+  alert rules are built on ("has this feature been red two nights running?");
+- **one trace** → `${OTEL_INGEST_URL}/v1/traces` — the run as a timeline
+  ([below](#the-run-trace-one-run-one-trace)): what ran when, how long each feature
+  took, which failed and with what message.
+
+### Metrics
+
+All five metrics are gauges, written once per run:
 
 | Metric | Attributes | Meaning |
 |---|---|---|
@@ -194,11 +205,12 @@ every panel and alert silently merges both, and a failure over there would page 
 this repo (or the reverse). `cosy_platform_` states the subject: the Cosy **game-server
 platform**. Keep the prefix on every metric added here — do not shorten it back.
 
-Resource attributes on every data point: `service.name=cosy-systemtest`,
-`deployment.environment=<channel>`, `cosy.backend.image_tag`,
-`cosy.frontend.image_tag` and `cosy.systemtest.run_url` — so any point names the
-build it tested and links back to the GitHub run (and from there to the HTML report,
-traces and videos).
+Resource attributes on every data point — and on every span of the run's trace:
+`service.name=cosy-systemtest`, `deployment.environment=<channel>`,
+`cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_url` and
+`cosy.systemtest.trace_id` — so any point names the build it tested, links back to the
+GitHub run (and from there to the HTML report, Playwright traces and videos), and
+names the SigNoz trace of the same run.
 
 **How a skip is represented, and why.** A skipped feature is *untested*, which is
 neither a pass nor a failure. Reporting it as `1` would claim a feature works when
@@ -213,6 +225,47 @@ reports `feature_skipped`, so a feature that quietly stops running is visible as
 `uninstall` is the one row asserted by the workflow rather than by a spec; the push
 step runs after that assertion, so it is reported exactly like every other feature.
 
+### The run trace: one run, one trace
+
+The metrics say *whether* a feature passed; the trace says *when it ran, for how long,
+in what order, and what the failure said*. Each run emits exactly one trace:
+
+| Span | Name | Attributes | Status |
+|---|---|---|---|
+| Root | `cosy-systemtest run (<channel>)` | `channel`, `cosy.systemtest.features.total` / `.passed` / `.failed` / `.skipped` | ERROR if any feature failed (message lists them), else OK |
+| Child (one per feature) | the feature key, e.g. `server-lifecycle` | `feature`, `channel`, `status`, `cosy.systemtest.duration_seconds`, `cosy.systemtest.timing` | failed → ERROR with the Playwright message; passed → OK; skipped → UNSET |
+
+**Finding a run's trace.** Three ways, in order of convenience:
+
+1. On the SigNoz dashboard, in **"Runs in window"**, click the run's row → **"Open this
+   run's trace"** (a panel context link to `/trace/<traceId>`).
+2. Copy the `cosy.systemtest.trace_id` column from that same table into the Traces
+   explorer's trace-id search, or straight into
+   `https://signoz.jannekeipert.de/trace/<traceId>`.
+3. Traces explorer → filter `service.name = cosy-systemtest` (add
+   `deployment.environment = release`) and pick the run by time. The GitHub workflow log
+   of the push step also prints the trace id and the ready-made link.
+
+**Timing is measured, not invented — where it can be.** The runner copies each spec's
+real `startTime`/`duration` out of the Playwright JSON report into `results/summary.json`
+(`startedAt` / `endedAt`) when it writes the summary, and the trace is laid out on those
+timestamps; such spans carry `cosy.systemtest.timing=measured`. Rows that have no
+measured window — in practice only `uninstall`, which the workflow appends with `jq`
+after the suite — are placed sequentially starting at the last measured end and marked
+`cosy.systemtest.timing=derived`. That position is truthful in order but not measured to
+the second, and the attribute says so. (If a summary carries no timestamps at all, the
+whole run is reconstructed back-to-back ending at `generatedAt`; the suite runs serially
+in CI with `workers: 1`, so sequential is the honest reconstruction — and every span is
+then marked `derived`.)
+
+**How a skip looks in the trace.** A skipped feature is emitted as a **zero-length span
+named `<feature> [skipped]` with span status UNSET** and `status=skipped` — never OK,
+because OK would claim something was verified. It is *not* omitted: a missing span would
+be indistinguishable from a feature that was quietly dropped from the suite, which is
+exactly the failure the `feature_skipped` metric exists to prevent. Consequently a root
+span can be OK while features were skipped — read the root's `features.skipped`
+attribute, exactly as `run_success` must be read together with `feature_skipped`.
+
 **Dry-run behaviour (local runs and forks).** The push happens only when
 `OTEL_INGEST_URL`, `OTEL_INGEST_USER` and `OTEL_INGEST_PASSWORD` are all set and
 non-empty. Otherwise the runner prints one INFO line, leaves `results/summary.json`
@@ -220,9 +273,11 @@ as the complete result, and exits 0 — so `npm run systemtest` on a laptop or i
 fork (where secrets are not exposed) behaves exactly as it did before.
 
 **A failed push fails the job.** Red features never fail the runner, but a push that
-fails — bad credentials, ingest down, a `200` whose body reports rejected data points,
-or a `results/summary.json` that is missing or malformed — exits non-zero with a
-`::error::` annotation, after three attempts. A reporting path that breaks silently
+fails — bad credentials, ingest down, a `200` whose body reports rejected data points or
+spans, or a `results/summary.json` that is missing or malformed — exits non-zero with a
+`::error::` annotation, after three attempts per signal. **Both** signals are attempted
+even if the first fails (half the picture beats none), and a failure in either fails the
+job. A reporting path that breaks silently
 would leave the dashboard stale with nobody noticing, which is the failure mode this
 reporting exists to prevent. The summary is written by an earlier step, so the results
 artifact survives a failed push intact.
@@ -252,9 +307,17 @@ What is on it:
 | Release channel — current state | Is the published product healthy *right now*? Passing / failing / **unexpected failures** / skipped / features reported / hours since the last run |
 | Feature × time — release | *When* did a feature break, and for how long? A stacked band per failing feature, plus per-feature status and skip history |
 | Duration trends | Is anything getting slower? Per-feature duration over time, suite total, slowest feature, count over 120 s |
-| Build under test | Which images produced this result? Per-run table of `cosy.backend.image_tag` / `cosy.frontend.image_tag` / the GitHub run URL — so a red cell is attributable to a build and one click from the report, trace and video |
+| Build under test & drill-down | Which images produced this result, and what did the run look like? Per-run table of `cosy.backend.image_tag` / `cosy.frontend.image_tag` / the GitHub run URL / `cosy.systemtest.trace_id` — so a red cell is attributable to a build, one click from the report and video, and one click from **"Open this run's trace"** (see below) |
 | Staging channel | Will the *next* release break this? Same view for pre-release `sha-<short>` builds |
 | Known expected reds & skips | The two documented product-bug reds and the one intentional skip, stated explicitly rather than left to look like breakage |
+
+**From the dashboard to the run's trace.** The "Runs in window" table groups by
+`cosy.systemtest.trace_id` (a resource attribute the runner puts on the metrics, holding
+the id of the trace the same run emitted) and carries a SigNoz **context link**:
+click a row → *Open this run's trace* → `/trace/{{_cosy.systemtest.trace_id}}`, i.e. the
+trace-detail page of that exact run. The id is also visible as a column, so it works by
+copy-paste when the context menu is not available. Context links are a v5-dashboard
+feature of SigNoz ≥ 0.13x — the panel JSON field is `contextLinks.linksData`.
 
 **Every query wraps its metric in `last_over_time(...[26h])`, on purpose.** A nightly
 publishes exactly one sample per feature per day; Prometheus' 5-minute lookback would
