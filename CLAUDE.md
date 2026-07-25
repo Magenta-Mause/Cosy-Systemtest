@@ -73,13 +73,14 @@ unaffected. When they *are* set, a failed push exits **1** (see convention 8).
    `--push-only` (push an existing summary, no Playwright); no flag = both, the local
    default. CI runs them as two steps — see convention 10.
 9. **Never report a skip as a pass.** A skipped feature is omitted from
-   `cosy_systemtest_feature_status` and `cosy_systemtest_feature_duration_seconds`
-   (a `0` duration would read as "it got faster") and flagged by
-   `cosy_systemtest_feature_skipped=1`; every feature reports that gauge (`0` when it
-   ran) so "this feature stopped running" stays visible instead of becoming a gap.
-   `cosy_systemtest_run_success` only means "nothing failed" — never read it without
-   the skipped gauge. If you add a metric, keep this rule: absence of evidence is
-   never reported as evidence of health.
+   `cosy_platform_systemtest_feature_status` and
+   `cosy_platform_systemtest_feature_duration_seconds` (a `0` duration would read as
+   "it got faster") and flagged by `cosy_platform_systemtest_feature_skipped=1`;
+   every feature reports that gauge (`0` when it ran) so "this feature stopped
+   running" stays visible instead of becoming a gap.
+   `cosy_platform_systemtest_run_success` only means "nothing failed" — never read it
+   without the skipped gauge. If you add a metric, keep this rule: absence of evidence
+   is never reported as evidence of health.
 10. **Install/uninstall belong to the workflow**, not to Playwright. `uninstall` is a
     workflow-appended row in `results/summary.json`, not a spec. **The push therefore
     comes last:** the suite step runs `--no-push`, the teardown assertion appends the
@@ -88,7 +89,7 @@ unaffected. When they *are* set, a failed push exits **1** (see convention 8).
     suite step — that reported 19 of 20 features and made the dashboard lie. The
     accepted cost: a job cancelled by `timeout-minutes` reports nothing at all (it
     loses the artifact too), which is visible as staleness in
-    `cosy_systemtest_last_run_timestamp_seconds`.
+    `cosy_platform_systemtest_last_run_timestamp_seconds`.
 11. **A result must be attributable to a build.** The workflow's `backend_tag` /
     `frontend_tag` / `config_ref` dispatch inputs are forwarded to `install_cosy.sh`
     only when non-empty; the effective tags are then read back from the installed
@@ -97,6 +98,14 @@ unaffected. When they *are* set, a failed push exits **1** (see convention 8).
     (`cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_url`),
     so a data point in SigNoz names its build and its run. Never drop those fields —
     a red row is meaningless without them.
+12. **Every metric name starts with `cosy_platform_systemtest_`.** The shorter
+    `cosy_systemtest_*` namespace is already taken in the same SigNoz instance by the
+    **Cosy Domain Provider** systemtest (a different product; it reaches SigNoz via
+    Pushgateway → Prometheus remote_write and already has a dashboard and alert rules
+    on those names). Sharing a metric name across two products silently merges their
+    series, so a panel would mix both and an alert would fire for the wrong one.
+    `cosy_platform_` names *this* repo's subject: the Cosy game-server platform. Do
+    not "simplify" the prefix away, and give any new metric the same one.
 
 ## Layout
 

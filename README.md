@@ -147,9 +147,9 @@ matrix. Writing and pushing are now separate modes of the same runner, and the p
 runs last with `if: always()`. The accepted cost: if the whole job hits its
 `timeout-minutes`, GitHub cancels the remaining steps and that run reports nothing
 (it loses the results artifact for the same reason) — visible as a stale
-`cosy_systemtest_last_run_timestamp_seconds`. That is preferable to pushing twice per
-run just to cover it, which would put a second, `uninstall`-less matrix on the
-dashboard every night.
+`cosy_platform_systemtest_last_run_timestamp_seconds`. That is preferable to pushing
+twice per run just to cover it, which would put a second, `uninstall`-less matrix on
+the dashboard every night.
 
 ### Testing a specific, not-yet-released build
 
@@ -179,11 +179,20 @@ fronts the SigNoz collector. All five metrics are gauges, written once per run:
 
 | Metric | Attributes | Meaning |
 |---|---|---|
-| `cosy_systemtest_feature_status` | `feature`, `channel` | `1` passed, `0` failed. **Skipped features are not reported here.** |
-| `cosy_systemtest_feature_skipped` | `feature`, `channel` | `1` the feature did not run, `0` it ran |
-| `cosy_systemtest_feature_duration_seconds` | `feature`, `channel` | Wall-clock seconds; skipped features are absent |
-| `cosy_systemtest_run_success` | `channel` | `1` if no feature failed, else `0` |
-| `cosy_systemtest_last_run_timestamp_seconds` | `channel` | Unix time of the run — the staleness signal |
+| `cosy_platform_systemtest_feature_status` | `feature`, `channel` | `1` passed, `0` failed. **Skipped features are not reported here.** |
+| `cosy_platform_systemtest_feature_skipped` | `feature`, `channel` | `1` the feature did not run, `0` it ran |
+| `cosy_platform_systemtest_feature_duration_seconds` | `feature`, `channel` | Wall-clock seconds; skipped features are absent |
+| `cosy_platform_systemtest_run_success` | `channel` | `1` if no feature failed, else `0` |
+| `cosy_platform_systemtest_last_run_timestamp_seconds` | `channel` | Unix time of the run — the staleness signal |
+
+**Why the names start with `cosy_platform_`, not just `cosy_`.** The obvious
+`cosy_systemtest_*` namespace is already occupied in the same SigNoz instance by the
+**Cosy Domain Provider** systemtest — a different product, reporting via Pushgateway →
+Prometheus remote_write, with a Grafana dashboard and alert rules already built on
+`cosy_systemtest_run_success` and friends. Two products under one metric name means
+every panel and alert silently merges both, and a failure over there would page for
+this repo (or the reverse). `cosy_platform_` states the subject: the Cosy **game-server
+platform**. Keep the prefix on every metric added here — do not shorten it back.
 
 Resource attributes on every data point: `service.name=cosy-systemtest`,
 `deployment.environment=<channel>`, `cosy.backend.image_tag`,

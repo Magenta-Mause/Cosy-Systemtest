@@ -52,12 +52,22 @@ const PUSH_RETRY_DELAY_MS = 3_000;
 /** Cap on collector error text echoed into the log. */
 const ERROR_BODY_CHARS = 500;
 
+/**
+ * Metric names. The `cosy_platform_` prefix is load-bearing, not verbosity: the
+ * plain `cosy_systemtest_*` namespace is already used in the same SigNoz instance
+ * by the *Cosy Domain Provider* systemtest (a different product, ingested via
+ * Pushgateway → Prometheus remote_write), which has dashboards and alert rules on
+ * those names. Sharing a name merges two products into one series, so a panel would
+ * mix both and an alert would fire for the wrong one. `cosy_platform_` names this
+ * repo's subject — the Cosy game-server platform. Do not shorten it; give any new
+ * metric the same prefix.
+ */
 const METRIC = {
-  featureStatus: 'cosy_systemtest_feature_status',
-  featureSkipped: 'cosy_systemtest_feature_skipped',
-  featureDuration: 'cosy_systemtest_feature_duration_seconds',
-  runSuccess: 'cosy_systemtest_run_success',
-  lastRunTimestamp: 'cosy_systemtest_last_run_timestamp_seconds',
+  featureStatus: 'cosy_platform_systemtest_feature_status',
+  featureSkipped: 'cosy_platform_systemtest_feature_skipped',
+  featureDuration: 'cosy_platform_systemtest_feature_duration_seconds',
+  runSuccess: 'cosy_platform_systemtest_run_success',
+  lastRunTimestamp: 'cosy_platform_systemtest_last_run_timestamp_seconds',
 } as const;
 
 type FeatureStatus = 'passed' | 'failed' | 'skipped';
@@ -367,7 +377,7 @@ export function buildMetricsPayload(summary: Summary): OtlpPayload {
     gauge(
       METRIC.featureStatus,
       '1 = feature passed, 0 = feature failed. Skipped features are absent by ' +
-        'design — see cosy_systemtest_feature_skipped.',
+        'design — see cosy_platform_systemtest_feature_skipped.',
       '1',
       executed.map((f) => ({
         attributes: featureAttributes(f.feature),
@@ -398,7 +408,7 @@ export function buildMetricsPayload(summary: Summary): OtlpPayload {
     gauge(
       METRIC.runSuccess,
       '1 = no feature failed in this run, 0 = at least one did. Skips do not count ' +
-        'as failures — pair with cosy_systemtest_feature_skipped.',
+        'as failures — pair with cosy_platform_systemtest_feature_skipped.',
       '1',
       [{ attributes: channelAttributes, timeUnixNano, asInt: anyFailed ? '0' : '1' }],
     ),

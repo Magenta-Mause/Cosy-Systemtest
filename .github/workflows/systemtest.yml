@@ -336,8 +336,8 @@ jobs:
       # ~45 s instead of 300 s × 3 retries × 4 specs — the ~46 min that cancelled run 18
       # (docs/KNOWN-ISSUES.md) is what made a mid-job cancellation likely at all — and a
       # run that never reports is visible as staleness in
-      # `cosy_systemtest_last_run_timestamp_seconds`. A belt-and-braces push inside the
-      # suite step would buy that edge case at the price of double-reporting every
+      # `cosy_platform_systemtest_last_run_timestamp_seconds`. A belt-and-braces push
+      # inside the suite step would buy that edge case at the price of double-reporting every
       # healthy night: two timestamps per run and two sets of feature points, the earlier
       # set missing `uninstall`, i.e. exactly the misleading matrix this step removes.
       #
