@@ -52,11 +52,14 @@ failed push of *either* exits **1** (see convention 8).
    `@playwright/test`.
 2. **No selectors in specs.** All selectors + UI actions live in `tests/pages/*`.
    Specs describe behaviour with `test.step('Given/When/Then …')`.
-3. **`data-testid`s are owned by the Cosy frontend.** The frontend currently has
-   none, so page objects use accessible role/label selectors marked `// TODO(testid)`
-   and every gap is logged in [docs/testid-gaps.md](docs/testid-gaps.md). When you
-   add an id in `Cosy-Frontend`, switch the page object to `getByTestId` and remove
-   the gap row — do **not** invent ids only here.
+3. **`data-testid`s are owned by the Cosy frontend.** Since v1.1.0 the frontend ships
+   Phase 1 of them, and page objects use `getByTestId` wherever an id exists. Sites
+   with no id yet use accessible role/label selectors marked `// TODO(testid)`, and
+   every gap is logged in [docs/testid-gaps.md](docs/testid-gaps.md). When you add an
+   id in `Cosy-Frontend`, switch the page object to `getByTestId` and remove the gap
+   row — do **not** invent ids only here.
+   **Prefer a testid to a label for anything you click**: a loading Button REPLACES
+   its children with a loading label, so a name-based locator stops matching mid-action.
 4. **No raw API calls for assertions in specs.** `helpers/api.ts` (the `apiClient`
    fixture) is for setup/teardown only (login, create/delete/poll servers); features
    are proven through the UI.
@@ -158,13 +161,16 @@ failed push of *either* exits **1** (see convention 8).
     - The trace id is pushed as the metrics resource attribute
       `cosy.systemtest.trace_id`, which is what lets the dashboard link a run's row to
       `/trace/<id>`. Keep the two in sync — they are generated once per push.
-15. **Known reds are excluded from paging, never from the suite.** `templates` and
-    `server-from-template` (released product bug) and `rcon` (quarantined) are excluded
-    from the alert rules and from the dashboard's "Unexpected failures" tile — a rule
-    that fires every night forever gets muted and then misses the real regression. They
-    are NOT skipped in the suite and NOT hidden on the dashboard, which shows their
-    expected counts explicitly. When you add or remove such an exclusion, change the
-    rule, the panel and `docs/KNOWN-ISSUES.md` in one commit.
+15. **Known reds are excluded from paging, never from the suite.** Today the only
+    exclusion is `rcon` (quarantined) in `CosySystemtestFeatureNotRunning` — a rule
+    that fires every night forever gets muted and then misses the real regression. It
+    is NOT skipped silently and NOT hidden on the dashboard, which shows the expected
+    count explicitly. The `templates` / `server-from-template` exclusion that stood for
+    the whole v1.0.3 line was removed when v1.1.0 shipped the create-wizard fix, along
+    with the `CosySystemtestKnownBugFixed` rule that existed to prompt that removal.
+    When you add or remove such an exclusion, change the rule, the panel and
+    `docs/KNOWN-ISSUES.md` in one commit — and pair any new exclusion with a
+    `KnownBugFixed`-style rule, or it becomes a blind spot nobody revisits.
 16. **The hosted report URL is DERIVED, and the layout on disk must match it.** The
     workflow's "Publish Playwright report" step mirrors `playwright-report/` to
     `s3://cosy-systemtest-reports/<channel>/<github-run-id>/`, and

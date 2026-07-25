@@ -8,11 +8,26 @@ import {
 
 /**
  * The three-step create-server wizard, derived from the RELEASED frontend
- * (revision 5dba6e8, the image pinned by installer v1.0.3):
- *   Step 1 "Choose name and Game"  — server name + optional game → "Next Step"
- *   Step 2 "Choose Template"        — none for a generic game → "Continue without Template"
- *   Step 3 "Configure your Server"  — Docker image (+ RAM, + optional volume) →
- *                                     "Create Server" → confirm dialog
+ * (revision 2659b07, the image pinned by installer v1.1.0):
+ *   Step 1 "Choose a Game & Template" — game sidebar + template browser
+ *   Step 2 "Choose Template"          — server name + the template's variables
+ *   Step 3 "Configure your Server"    — Docker image (+ RAM, + optional volume) →
+ *                                       "Create Server" → confirm dialog
+ *
+ * THE STEPS WERE RESHUFFLED IN v1.1.0. On v1.0.3 step 1 was "name + game" and step 2
+ * was the template list; now BOTH the game and the template are chosen on step 1, and
+ * the server name moved to step 2. Anything that used to advance from step 1 to reach
+ * the templates now finds them without advancing at all. The step-2 label still reads
+ * "Choose Template" — that is stale copy in the product, not a mistake here.
+ *
+ * The game picker is a SIDEBAR of buttons with a "Search games..." box, not the old
+ * `#external_game_id` autocomplete (which no longer exists). Its always-present first
+ * entry is "Generic Server" (v1.0.3 called it "Generic Game"). Selecting a game only
+ * changes CSS classes — there is no aria-selected — so selection is confirmed
+ * behaviourally, by waiting for the template pane to re-render.
+ *
+ * Clicking a template card ADVANCES to step 2 by itself (`handleTemplateSelected`);
+ * the Next button is only needed for the no-template path.
  *
  * INPUT HANDLING — why keystrokes, not fill(): every wizard field is a *fully
  * controlled* React input (`value={gameServerState[attr]}`, onChange →
@@ -26,25 +41,40 @@ import {
  * advance button became enabled, so a regression fails in seconds with a clear
  * message instead of hanging on actionability.
  *
- * Fields carry stable `id`s (`server_name`, `docker_image_name`, `docker_max_memory`);
- * the optional volume-mount row is matched by its `/data` placeholder. No
- * `data-testid`s exist in this release — see docs/testid-gaps.md.
+ * SELECTORS: v1.1.0 ships data-testids for the wizard's load-bearing controls
+ * (`create-server-next-btn`, `create-field-*`, `create-confirm-btn`,
+ * `create-success-open-dashboard-btn`) and they are used here. The advance button is
+ * addressed by testid rather than by label ON PURPOSE: since v1.1.0 a loading Button
+ * REPLACES its children with a loading label, so `getByRole('button', {name: 'Create
+ * Server'})` stops matching the moment it is clicked. Controls with no testid yet
+ * (sidebar games, template cards, the memory unit select, list-input rows) keep
+ * role/id selectors and are logged in docs/testid-gaps.md.
  */
-// Type at a human cadence, not machine speed: verified locally (released frontend
-// 5dba6e8, dev + prod builds, real dialog with/without data) that both fast and
-// 60ms-delayed keystrokes persist the controlled-input value without crashing.
-// A user-like delay is the realistic write and costs a fraction of a second.
+// Type at a human cadence, not machine speed: verified locally (released frontend,
+// dev + prod builds, real dialog with/without data) that both fast and 60ms-delayed
+// keystrokes persist the controlled-input value without crashing. A user-like delay
+// is the realistic write and costs a fraction of a second.
 const KEYSTROKE_DELAY_MS = 60;
+
+/** Step-1 sidebar label for the always-present no-game entry (was "Generic Game" on v1.0.3). */
+const GENERIC_GAME_LABEL = 'Generic Server';
+
+/**
+ * Both "nothing to choose here" branches of the template pane. Step 1's
+ * TemplateBrowser says "No templates available for this game."; step 2 says "No
+ * templates are available for this game. You can proceed." One regex covers both.
+ */
+const NO_TEMPLATES_RE = /No templates (are )?available for this game/i;
 
 export class CreateServerPage {
   /** Set if a React "maximum update depth"/#185 error is observed on the page. */
   private reactCrash: string | null = null;
 
   constructor(private readonly page: Page) {
-    // The released create wizard has been seen to blank out with React #185
-    // (maximum update depth) during the create flow in CI. Capture it so a crash
-    // surfaces as a clear, truthful failure instead of a misleading "value did not
-    // persist" (the input vanishes when the app unmounts). See docs/KNOWN-ISSUES.md.
+    // The create wizard has been seen to blank out with React #185 (maximum update
+    // depth) during the create flow in CI. Capture it so a crash surfaces as a clear,
+    // truthful failure instead of a misleading "value did not persist" (the input
+    // vanishes when the app unmounts). See docs/KNOWN-ISSUES.md.
     const record = (text: string) => {
       if (/Maximum update depth|Minified React error #185|error #185|#185/i.test(text)) {
         this.reactCrash ??= text;
@@ -60,9 +90,24 @@ export class CreateServerPage {
     return this.page.getByRole('dialog');
   }
 
-  private field(id: string): Locator {
-    // TODO(testid): replace #id with data-testid on GenericGameServerCreationInputField
+  /**
+   * A wizard input by its `create-field-<attribute>` testid. Only the attributes that
+   * render through GenericGameServerCreationInputField (plus the memory widget) carry
+   * one: server_name, docker_image_name, docker_image_tag, execution_command,
+   * docker_max_memory. List-style inputs do NOT — use {@link legacyField} for those.
+   */
+  private field(attribute: string): Locator {
+    return this.dialog.getByTestId(`create-field-${attribute}`);
+  }
+
+  /** An input that still has only a DOM id (no testid yet) — e.g. docker_max_cpu. */
+  private legacyField(id: string): Locator {
     return this.dialog.locator(`#${id}`);
+  }
+
+  /** The wizard's single advance button (label varies by step and by loading state). */
+  private get nextButton(): Locator {
+    return this.dialog.getByTestId('create-server-next-btn');
   }
 
   /**
@@ -76,10 +121,10 @@ export class CreateServerPage {
     const blanked = dialogGone && rootLen < 200;
     if (this.reactCrash || blanked) {
       throw new Error(
-        `Released create wizard CRASHED while ${during}: the app unmounted ` +
+        `Create wizard CRASHED while ${during}: the app unmounted ` +
           `(${this.reactCrash ? `React "${this.reactCrash.split('\n')[0]}"` : 'page blanked out'}). ` +
-          `This is a released Cosy v1.0.3 defect surfaced by the systemtest — the create ` +
-          `feature is genuinely broken in that run. See docs/KNOWN-ISSUES.md.`,
+          `This is a product defect surfaced by the systemtest — the create feature is ` +
+          `genuinely broken in that run. See docs/KNOWN-ISSUES.md.`,
       );
     }
   }
@@ -109,7 +154,8 @@ export class CreateServerPage {
    * plus a separate unit `<Select>` ("MiB" | "GiB", default "MiB"). It emits
    * `${number}${unit}` (e.g. "512MiB") to the parent. So we type only the numeric
    * part into the number input and, only when the unit differs from the default,
-   * pick it from the select. `id="docker_max_memory"` lands on the numeric input.
+   * pick it from the select. The `create-field-docker_max_memory` testid is passed
+   * through MemoryLimitInput onto the NUMERIC input; the unit select has none.
    */
   private async setMemoryLimit(memory: string): Promise<void> {
     const m = /^\s*(\d+(?:\.\d+)?)\s*(MiB|GiB)?\s*$/.exec(memory);
@@ -146,83 +192,233 @@ export class CreateServerPage {
     }
   }
 
+  // ── Step 1: game sidebar & template browser ────────────────────────────────
+
+  /** A game entry in the step-1 sidebar (a button holding artwork + name + count). */
+  private gameOption(name: string | RegExp): Locator {
+    // TODO(testid): add data-testid={`game-option-${slug}`} to GameSidebar's SidebarItem
+    return this.dialog.getByRole('button', { name });
+  }
+
   /**
-   * Select a game so `external_game_id` becomes touched+valid (required to advance
-   * step 1). We pick the always-present generic fallback item ("Generic Game"):
-   *   - it is rendered client-side by `alwaysIncludeFallback`, so it works even if
-   *     the hosted games API is unreachable / returns nothing (robust + offline-safe);
-   *   - it selects no template, so step 3's Docker image stays empty and editable,
-   *     keeping a clean path to the custom `halftheopposite/tosios` image.
+   * The step-1 template pane. `TemplateList` renders a `<div role="listbox">` of
+   * `<Card role="option">` entries, so the role-based locator IS the real structure.
+   * When the selected game has no templates the browser renders a plain message
+   * INSTEAD of the listbox — see {@link NO_TEMPLATES_RE} and
+   * {@link waitForTemplateOptions}.
    */
-  private async selectGenericGame(): Promise<void> {
-    // The generic fallback option (i18n gameSelection.noResultsLabel = "Generic Game").
-    // TODO(testid): add data-testid="game-option-generic" to the fallback AutoComplete row
-    await this.selectGame('Generic Game', {
-      notFound:
-        'step 1: the generic-game fallback option never appeared in the game autocomplete',
+  private get templateList(): Locator {
+    return this.dialog.getByRole('listbox');
+  }
+
+  /** The template pane's empty/short-circuit branch (rendered instead of the listbox). */
+  private get noTemplatesMessage(): Locator {
+    return this.dialog.getByText(NO_TEMPLATES_RE);
+  }
+
+  /**
+   * Filter the game sidebar by typing into its "Search games..." box at human cadence
+   * (controlled input — a single-event fill() would not commit; see the module header).
+   */
+  async searchGames(query: string): Promise<void> {
+    const search = this.dialog.getByPlaceholder('Search games...');
+    await search.click();
+    await search.press('ControlOrMeta+a');
+    await search.press('Delete');
+    await search.pressSequentially(query, { delay: KEYSTROKE_DELAY_MS });
+  }
+
+  /**
+   * Select a game in the step-1 sidebar. Selecting a game is what filters the template
+   * browser to that game's templates, which is the whole template-creation path.
+   *
+   * The sidebar signals selection with CSS classes only (no aria-selected/aria-current),
+   * so instead of asserting on styling we confirm behaviourally: the template pane must
+   * settle into one of its two real states (a listbox, or the "no templates" message).
+   */
+  async selectGame(
+    name: string | RegExp,
+    opts: { notFound?: string } = {},
+  ): Promise<void> {
+    const option = this.gameOption(name).first();
+    await expect(
+      option,
+      opts.notFound ?? `step 1: game "${name}" was not offered in the game sidebar`,
+    ).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    await option.click();
+    await expect(this.templateList.or(this.noTemplatesMessage).first()).toBeVisible({
+      timeout: UI_FLOW_TIMEOUT_MS,
     });
   }
 
   /**
-   * Select a game in step 1's `#external_game_id` autocomplete by (accessible)
-   * name. Selecting a REAL game (e.g. Minecraft) is what makes that game's
-   * templates available in step 2 — the template-creation flow builds on this.
-   * A game selection is what registers `external_game_id` as touched+valid, so
-   * this is also the gate that lets "Next Step" enable (naming alone never does).
+   * Select the always-present generic entry so no template is applied: step 3's Docker
+   * image stays empty and editable, keeping a clean path to a custom image. It is
+   * rendered client-side, so it works even if the hosted games API is unreachable.
    */
-  async selectGame(
-    name: string | RegExp,
-    opts: { notFound?: string; expectedValue?: string | RegExp } = {},
-  ): Promise<void> {
-    const game = this.field('external_game_id');
-    await game.click(); // defaultOpen: focus/click opens the game popover
-    const option = this.page.getByRole('option', { name }).first();
-    await expect(
-      option,
-      opts.notFound ?? `step 1: game "${name}" was not offered in the game autocomplete`,
-    ).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await option.click();
-    // After selection the game input shows the chosen label.
-    await expect(game).toHaveValue(opts.expectedValue ?? name, {
-      timeout: UI_ACTION_TIMEOUT_MS,
+  private async selectGenericGame(): Promise<void> {
+    await this.selectGame(GENERIC_GAME_LABEL, {
+      notFound: `step 1: the "${GENERIC_GAME_LABEL}" sidebar entry never appeared`,
     });
   }
 
   /**
    * Select a game resiliently against the flaky hosted games API (cosy-game-api /
-   * SteamGridDB): the first popover query can return empty / be slow / be
-   * rate-limited, so re-type the query and retry the whole selection (open → option
-   * visible → click → value committed) within a generous budget. Used by the
-   * template flow, whose game choice MUST succeed for step 2 to load templates.
+   * SteamGridDB): the first query can return empty / be slow / be rate-limited, so
+   * re-type the search and retry the whole selection within a generous budget.
    */
   async selectGameResilient(name: string): Promise<void> {
     const re = new RegExp(name, 'i');
     await expect(async () => {
       await this.searchGames(name); // re-type to (re)trigger the hosted search
-      const option = this.gameOption(re).first();
-      await expect(option).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-      await option.click();
-      await expect(this.field('external_game_id')).toHaveValue(re, {
+      await this.selectGame(re);
+    }).toPass({ timeout: UI_FLOW_TIMEOUT_MS });
+  }
+
+  /** Assert a game is offered in the catalog (case-insensitive on its name). */
+  async expectGameOffered(name: string): Promise<void> {
+    await this.searchGames(name);
+    await expect(this.gameOption(new RegExp(name, 'i')).first()).toBeVisible({
+      timeout: UI_ACTION_TIMEOUT_MS,
+    });
+  }
+
+  /**
+   * Retry-tolerant "game is offered" check for the flaky hosted games API. The sidebar
+   * is populated from cosy-game-api (SteamGridDB proxy), which under the catalog spec's
+   * repeated searches can be eventually-consistent / rate-limited, so a game that
+   * `games-search` finds may momentarily not appear here. Re-type the query to
+   * re-trigger the hosted search and retry within a generous budget — proving the
+   * catalog is reachable without flaking on transient misses.
+   */
+  async expectGameOfferedResilient(name: string): Promise<void> {
+    await expect(async () => {
+      await this.searchGames(name); // re-type to (re)trigger the hosted search
+      await expect(this.gameOption(new RegExp(name, 'i')).first()).toBeVisible({
         timeout: UI_ACTION_TIMEOUT_MS,
       });
     }).toPass({ timeout: UI_FLOW_TIMEOUT_MS });
   }
 
-  /** Assert a wizard advance button is enabled (fail fast) and click it. */
-  private async advance(label: string | RegExp, step: string, exact = false): Promise<void> {
-    const btn = this.dialog.getByRole('button', { name: label, exact });
+  /**
+   * Assert the search returns a matching game result. Proves the hosted game-service
+   * path (backend → cosy-game-api → SteamGridDB) is reachable and the query returns
+   * the expected game as a selectable entry. Call {@link searchGames} first.
+   *
+   * Since v1.1.0 the sidebar DOES render game artwork (`GameSidebar` shows
+   * `game.logo_url`, falling back to a console icon), unlike v1.0.3 which rendered
+   * name + template count only. The `<img>` carries `alt=""`, so it is invisible to
+   * accessible-name matching and must be asserted structurally — see
+   * {@link expectGameArtwork}.
+   */
+  async expectGameResult(name: string): Promise<void> {
+    await expect(this.gameOption(new RegExp(name, 'i')).first()).toBeVisible({
+      timeout: UI_FLOW_TIMEOUT_MS,
+    });
+  }
+
+  /**
+   * Assert a game entry renders real artwork from the games API rather than the local
+   * fallback icon. `alt=""` is deliberate (decorative), so match the `<img>` itself.
+   */
+  async expectGameArtwork(name: string): Promise<void> {
+    const artwork = this.gameOption(new RegExp(name, 'i')).first().locator('img');
+    await expect(
+      artwork,
+      `game "${name}" rendered no artwork <img> — the games API returned no logo_url, ` +
+        `so the sidebar fell back to the local console icon`,
+    ).toBeVisible({ timeout: UI_FLOW_TIMEOUT_MS });
+  }
+
+  /**
+   * Wait for the template pane to actually offer templates, tolerating the slice still
+   * loading. `templateMatchesGame` filters the templates redux slice by the selected
+   * game, and until that fetch resolves the list is empty → the browser renders the
+   * "No templates available" branch (no listbox), then re-renders once the templates
+   * arrive. So a short wait can observe the empty branch and give up. Poll generously,
+   * and if we still end on the empty branch say so precisely — that distinguishes
+   * "hosted template API returned nothing for this game" from "the locator is wrong".
+   */
+  private async waitForTemplateOptions(): Promise<void> {
+    const option = this.templateList.getByRole('option').first();
+    try {
+      await expect(option).toBeVisible({ timeout: UI_FLOW_TIMEOUT_MS });
+    } catch (e) {
+      if (await this.noTemplatesMessage.isVisible().catch(() => false)) {
+        throw new Error(
+          'step 1: the wizard reports "No templates available for this game" — the ' +
+            'templates slice loaded but contained no template matching the selected ' +
+            "game (hosted template API empty/unreachable, or `templateMatchesGame` no " +
+            'longer matches the template\'s game_id slug against the game). This is NOT ' +
+            'a selector problem: TemplateList renders role=listbox/role=option when it ' +
+            'has templates. NOTE: on v1.0.3 this message was the KNOWN product bug ' +
+            '(string game_id vs numeric external_game_id); v1.1.0 fixed it, so seeing ' +
+            'it now is a regression.',
+          { cause: e },
+        );
+      }
+      await this.throwIfCrashed('waiting for the step-1 template list');
+      throw new Error(
+        'step 1: no template options appeared and the "no templates" message was not ' +
+          'shown either — the template list never rendered.',
+        { cause: e },
+      );
+    }
+  }
+
+  /**
+   * Assert the step-1 template browser offers at least one template for the
+   * already-selected game — proof the hosted catalog loaded.
+   *
+   * On v1.0.3 this had to advance past step 1 first; since v1.1.0 the templates live
+   * on step 1 next to the game sidebar, so no advance is needed.
+   */
+  async expectTemplateOptionsPresent(): Promise<void> {
+    await this.waitForTemplateOptions();
+  }
+
+  // ── Advancing ──────────────────────────────────────────────────────────────
+
+  /**
+   * Assert the wizard's advance button is enabled (fail fast) and click it.
+   *
+   * Addressed by testid, never by label: the button's text changes per step
+   * ("Continue without Template" / "Apply Template" / "Create Server") AND is replaced
+   * by a loading label while a request is in flight. `expectedLabel` is asserted
+   * separately so a step-order regression fails loudly with a readable message.
+   *
+   * Note the label tracks whether a template has been applied, NOT the step index, so
+   * it does not uniquely identify a step: in the no-template flow steps 1 and 2 both
+   * read "Continue without Template". A swap of those two would slip past this check
+   * and is caught instead by step 2's click on `create-field-server_name`.
+   */
+  private async advance(
+    step: string,
+    opts: { expectedLabel?: string | RegExp } = {},
+  ): Promise<void> {
+    const btn = this.nextButton;
     try {
       await expect(btn).toBeEnabled({ timeout: UI_ACTION_TIMEOUT_MS });
     } catch (e) {
       await this.throwIfCrashed(`advancing past ${step}`);
       throw new Error(
-        `${step}: "${label}" never became enabled — wizard step validation was not ` +
-          `satisfied (a required controlled input did not register as touched+valid).`,
+        `${step}: the advance button never became enabled — wizard step validation was ` +
+          `not satisfied (a required controlled input did not register as touched+valid, ` +
+          `or a required template variable is unfilled).`,
         { cause: e },
       );
     }
+    if (opts.expectedLabel !== undefined) {
+      await expect(
+        btn,
+        `${step}: the advance button read something unexpected — the wizard is probably ` +
+          `not on the step this helper thinks it is on`,
+      ).toHaveText(opts.expectedLabel, { timeout: UI_ACTION_TIMEOUT_MS });
+    }
     await btn.click();
   }
+
+  // ── Full flows ─────────────────────────────────────────────────────────────
 
   /**
    * Full flow: create a server with a custom Docker image + memory limit (and an
@@ -236,16 +432,18 @@ export class CreateServerPage {
     /** Optional container path for a volume mount, e.g. "/data" — needed for file ops. */
     volumeMount?: string;
   }): Promise<void> {
-    // Step 1 "Choose name and Game": name the server AND pick a game. A game
-    // selection is REQUIRED to advance — the game field registers external_game_id
-    // in the page-validity gate and stays touched=false until an item is selected,
-    // so "Next Step" is disabled until then (naming alone never enables it).
-    await this.typeInto(this.field('server_name'), opts.serverName, 'server name');
+    // Step 1 "Choose a Game & Template": take the generic entry so no template is
+    // applied and step 3's docker image stays ours. Step 1 is always valid, so the
+    // advance button is enabled immediately and reads "Continue without Template".
     await this.selectGenericGame();
-    await this.advance('Next Step', 'step 1 (name/game)');
+    await this.advance('step 1 (game/template)', {
+      expectedLabel: /Continue without Template/i,
+    });
 
-    // Step 2 "Choose Template": a generic game has no templates → continue without one.
-    await this.advance('Continue without Template', 'step 2 (template)');
+    // Step 2 "Choose Template": on v1.1.0 this step holds the SERVER NAME (and any
+    // template variables — none here, since no template was applied).
+    await this.typeInto(this.field('server_name'), opts.serverName, 'server name');
+    await this.advance('step 2 (name)', { expectedLabel: /Continue without Template/i });
 
     // Step 3 "Configure your Server": custom Docker image + RAM limit (+ volume).
     await this.typeInto(this.field('docker_image_name'), opts.dockerImage, 'docker image');
@@ -260,224 +458,54 @@ export class CreateServerPage {
       // TODO(testid): add data-testid="create-volume-mount-input" to VolumeMountInput
       await this.typeInto(this.dialog.getByPlaceholder('/data'), opts.volumeMount, 'volume mount');
     }
-    await this.advance('Create Server', 'step 3 (configure)', true);
+    await this.advance('step 3 (configure)', { expectedLabel: /Create Server/i });
 
-    // Confirm dialog: title "Create Server?", confirm button "Create Server".
-    const confirm = this.page.getByRole('alertdialog');
-    await expect(confirm).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await confirm.getByRole('button', { name: 'Create Server', exact: true }).click();
-  }
-
-  /** Wait for the success dialog and open the created server's dashboard. */
-  async openCreatedServer(): Promise<void> {
-    const success = this.page.getByRole('dialog').filter({ hasText: 'Server Created!' });
-    await expect(success).toBeVisible({ timeout: SERVER_START_TIMEOUT_MS });
-    // Released label is "Go to dashboard" (main used "Open Dashboard").
-    await success.getByRole('button', { name: /Go to dashboard|Open Dashboard/ }).click();
-  }
-
-  // ── Step 1/2: game catalog & template inspection (templates / games-search) ──
-  //
-  // The released wizard's game picker IS the step-1 `#external_game_id`
-  // autocomplete (opened by clicking the field; typing filters it). There is no
-  // separate "Search games..." sidebar on release 5dba6e8, so these catalog
-  // helpers drive the SAME control the creation flow uses — keeping the extended
-  // catalog specs consistent with main's corrected wizard rather than forking a
-  // second UI model. Templates live on step 2 ("Choose Template"), reached via
-  // "Next Step" once step 1 is valid (name + game). Exact option/artwork DOM is
-  // best-effort and may need CI selector tuning against the live catalog.
-
-  /** A game option row in the step-1 autocomplete popover (name = game label). */
-  private gameOption(name: string | RegExp): Locator {
-    // TODO(testid): add data-testid={`game-option-${slug}`} to the AutoComplete row
-    return this.page.getByRole('option', { name });
-  }
-
-  /**
-   * The step-2 template list. Verified against released `TemplateList.tsx` (5dba6e8):
-   * a `<div role="listbox">` of `<Card role="option">` entries — so the role-based
-   * locator IS the real structure. Note Step2 renders a DIFFERENT branch entirely
-   * (a "No templates are available for this game." paragraph, no listbox at all)
-   * whenever `templatesForGame` is empty — which is also the state while the
-   * templates redux slice is still being fetched. Hence {@link waitForTemplateOptions}.
-   */
-  private get templateList(): Locator {
-    return this.dialog.getByRole('listbox');
-  }
-
-  /** Step-2's empty/short-circuit branch (rendered instead of the listbox). */
-  private get noTemplatesMessage(): Locator {
-    return this.dialog.getByText(/No templates are available for this game/i);
-  }
-
-  /**
-   * Wait for step 2 to actually offer templates, tolerating the slice still loading.
-   * `templatesForGame` filters the templates redux slice by the selected game, and
-   * until that fetch resolves the list is empty → Step2 renders the
-   * "No templates are available" branch (no listbox), then re-renders once the
-   * templates arrive. So a short wait can observe the empty branch and give up. Poll
-   * generously, and if we still end on the empty branch say so precisely — that
-   * distinguishes "hosted template API returned nothing for this game" from "the
-   * option locator is wrong".
-   */
-  private async waitForTemplateOptions(): Promise<void> {
-    const option = this.templateList.getByRole('option').first();
-    try {
-      await expect(option).toBeVisible({ timeout: UI_FLOW_TIMEOUT_MS });
-    } catch (e) {
-      if (await this.noTemplatesMessage.isVisible().catch(() => false)) {
-        throw new Error(
-          'step 2: the wizard reports "No templates are available for this game" — the ' +
-            'templates slice loaded but contained no template matching the selected ' +
-            "game's id (hosted template API empty/unreachable, or a game↔template id " +
-            'mismatch). This is NOT a selector problem: TemplateList renders ' +
-            'role=listbox/role=option when it has templates.',
-          { cause: e },
-        );
-      }
-      await this.throwIfCrashed('waiting for the step-2 template list');
-      throw new Error(
-        'step 2: no template options appeared and the "no templates" message was not ' +
-          'shown either — the template list never rendered.',
-        { cause: e },
-      );
-    }
-  }
-
-  /**
-   * Filter the game catalog by typing into the `#external_game_id` autocomplete
-   * at human cadence (the field is a controlled input — a single-event fill()
-   * would not commit; see the module header).
-   */
-  async searchGames(query: string): Promise<void> {
-    const game = this.field('external_game_id');
-    await game.click();
-    await game.press('ControlOrMeta+a');
-    await game.press('Delete');
-    await game.pressSequentially(query, { delay: KEYSTROKE_DELAY_MS });
-  }
-
-  /** Assert a game is offered in the catalog (case-insensitive on its name). */
-  async expectGameOffered(name: string): Promise<void> {
-    await this.field('external_game_id').click(); // open the popover
-    await expect(this.gameOption(new RegExp(name, 'i')).first()).toBeVisible({
-      timeout: UI_ACTION_TIMEOUT_MS,
-    });
-  }
-
-  /**
-   * Retry-tolerant "game is offered" check for the flaky hosted games API. The
-   * autocomplete queries cosy-game-api (SteamGridDB proxy), which under the catalog
-   * spec's multiple searches can be eventually-consistent / rate-limited, so a game
-   * that `games-search` finds may momentarily not appear here. Re-type the query to
-   * re-trigger the hosted search and retry until the option shows, within a generous
-   * budget — proving the catalog is reachable without flaking on transient misses.
-   */
-  async expectGameOfferedResilient(name: string): Promise<void> {
-    await expect(async () => {
-      await this.searchGames(name); // re-type to (re)trigger the hosted search
-      await expect(this.gameOption(new RegExp(name, 'i')).first()).toBeVisible({
-        timeout: UI_ACTION_TIMEOUT_MS,
-      });
-    }).toPass({ timeout: UI_FLOW_TIMEOUT_MS });
-  }
-
-  /**
-   * Assert the search returns a matching game result. Proves the hosted game-service
-   * path (backend → cosy-game-api → SteamGridDB) is reachable and the query returns
-   * the expected game as a selectable option. Call {@link searchGames} first so the
-   * popover is open + filtered. Uses a generous timeout because the hosted API is on
-   * the critical path.
-   *
-   * NOTE: the released wizard's game option (5dba6e8, `AutoCompleteItemList` /
-   * `Step1.mapGamesDtoToAutoCompleteItems`) renders ONLY the game name + template
-   * count — it sets no `leftSlot`, so there is no artwork `<img>` to assert on. See
-   * docs/KNOWN-ISSUES.md ("game search list surfaces no artwork").
-   */
-  async expectGameResult(name: string): Promise<void> {
-    await expect(this.gameOption(new RegExp(name, 'i')).first()).toBeVisible({
-      timeout: UI_FLOW_TIMEOUT_MS,
-    });
-  }
-
-  /**
-   * Advance from a chosen game (step 1) to "Choose Template" (step 2) and assert
-   * at least one template option is offered — proof the hosted catalog loaded.
-   * A server name is required for step 1 to validate, so a throwaway one is
-   * entered if the caller has not set it (catalog specs only care about step 2).
-   */
-  async expectTemplateOptionsPresent(): Promise<void> {
-    const nameField = this.field('server_name');
-    if (!(await nameField.inputValue().catch(() => ''))) {
-      await this.typeInto(nameField, `catalog-check-${Date.now()}`, 'server name');
-    }
-    await this.advance('Next Step', 'step 1 (name/game)');
-    await this.waitForTemplateOptions();
-  }
-
-  /**
-   * Fill a step-2 template-variable input (id=placeholder) at human cadence, if the
-   * selected template exposes it. The variable inputs mount a render tick AFTER the
-   * template card is clicked (React commits the selection → TemplateVariableForm
-   * renders `#version` / `#memory` / …), so an instantaneous check races that render
-   * and skips the field. Skipping a REQUIRED variable is fatal: e.g. the PaperMC
-   * template's `version` has no default, so an unfilled `version` keeps
-   * `validateTemplateVariables` false and the step-2 advance ("Apply Template")
-   * permanently disabled. Wait for the input before concluding the template lacks it.
-   */
-  private async typeTemplateVariable(id: string, value: string): Promise<void> {
-    const input = this.field(id);
-    try {
-      await input.waitFor({ state: 'visible', timeout: UI_ACTION_TIMEOUT_MS });
-    } catch {
-      return; // this template genuinely has no such variable
-    }
-    await this.typeInto(input, value, `template variable ${id}`);
+    await this.confirmCreate();
   }
 
   /**
    * Full "create from a hosted catalog template" flow (the server-from-template
-   * feature), built on the corrected step primitives (typeInto / selectGame /
-   * typeTemplateVariable / advance + crash detector):
-   *   Step 1 "Choose name and Game" — server name + the REAL game, "Next Step".
-   *   Step 2 "Choose Template"       — select the template, fill its required
-   *                                    variables, "Apply Template".
-   *   Step 3 "Configure your Server" — image/memory PREFILLED by the template, so the
-   *                                    step is already valid → "Create Server" → confirm.
+   * feature):
+   *   Step 1 — select the REAL game in the sidebar, then click its template card
+   *            (which advances to step 2 by itself).
+   *   Step 2 — server name + the template's required variables → "Apply Template".
+   *   Step 3 — image/memory PREFILLED by the template, so the step is already valid
+   *            → "Create Server" → confirm.
    * Leaves the success dialog open (caller opens the server via {@link openCreatedServer}).
    *
-   * The game MUST be a real SteamGridDB-backed catalog game (the step-1 autocomplete
-   * queries the games API, which is DISJOINT from the template service — a template
-   * whose game has no games-API presence is unreachable in the wizard). Minecraft is
+   * The game MUST be a real SteamGridDB-backed catalog game: the sidebar is populated
+   * from the games API, which is DISJOINT from the template service, so a template
+   * whose game has no games-API presence is unreachable in the wizard. Minecraft is
    * such a game and its image is already pulled by the `rcon` fixture (shared layers).
    */
   async createFromCatalogTemplate(opts: {
     serverName: string;
-    /** Step-1 game name to select so its templates load in step 2 (e.g. "minecraft"). */
+    /** Step-1 sidebar game to select so its templates are listed (e.g. "minecraft"). */
     game: string;
-    /** Step-2 template option to pick (e.g. /paper/i). */
+    /** Step-1 template card to pick (e.g. /paper/i). */
     template: string | RegExp;
     /** Required template-variable inputs to fill (id=placeholder → value). */
     templateVariables?: Record<string, string>;
     /** Optional: assert step-3's docker image was prefilled from the template. */
     expectImagePrefill?: string | RegExp;
   }): Promise<void> {
-    // Step 1 — name the server AND select the real game so its templates load in
-    // step 2. Selecting the game is REQUIRED to advance; select it resiliently since
-    // the hosted games API can be slow/empty on the first query.
-    await this.typeInto(this.field('server_name'), opts.serverName, 'server name');
+    // Step 1 — select the real game resiliently (the hosted games API can be slow or
+    // empty on the first query), then pick the template. Clicking a template card
+    // advances to step 2 on its own, so no advance() call belongs here.
     await this.selectGameResilient(opts.game);
-    await this.advance('Next Step', 'step 1 (name/game)');
-
-    // Step 2 — pick the catalog template, then fill its required variables. Once a
-    // template is selected the advance reads "Apply Template" (vs "Continue without
-    // Template") and only enables when validateTemplateVariables passes.
     await this.waitForTemplateOptions();
     await this.templateList.getByRole('option', { name: opts.template }).first().click();
+
+    // Step 2 — name the server, then fill the template's required variables. The
+    // advance reads "Apply Template" once a template is selected and only enables when
+    // validateTemplateVariables passes (every variable is required).
+    await this.typeInto(this.field('server_name'), opts.serverName, 'server name');
     for (const [id, value] of Object.entries(opts.templateVariables ?? {})) {
       await this.typeTemplateVariable(id, value);
     }
-    await this.advance(/Apply Template|Next Step|Continue/, 'step 2 (template)');
+    await this.advance('step 2 (name/template variables)', {
+      expectedLabel: /Apply Template/i,
+    });
 
     // Step 3 — the template applied its docker image + memory into the form state, so
     // the step is already valid; create without editing.
@@ -487,10 +515,44 @@ export class CreateServerPage {
         'step 3: template did not prefill the docker image',
       ).toHaveValue(opts.expectImagePrefill, { timeout: UI_ACTION_TIMEOUT_MS });
     }
-    await this.advance('Create Server', 'step 3 (configure)', true);
+    await this.advance('step 3 (configure)', { expectedLabel: /Create Server/i });
 
+    await this.confirmCreate();
+  }
+
+  /**
+   * Fill a step-2 template-variable input (id=placeholder) at human cadence, if the
+   * selected template exposes it. The variable inputs mount a render tick AFTER the
+   * template card is clicked (React commits the selection → TemplateVariableForm
+   * renders `#version` / `#memory` / …), so an instantaneous check races that render
+   * and skips the field. Skipping a variable is fatal: since v1.1.0 EVERY template
+   * variable is required (`isRequired: true` for all of them), so an unfilled one
+   * keeps `validateTemplateVariables` false and the step-2 advance permanently
+   * disabled. Wait for the input before concluding the template lacks it.
+   */
+  private async typeTemplateVariable(id: string, value: string): Promise<void> {
+    const input = this.legacyField(id);
+    try {
+      await input.waitFor({ state: 'visible', timeout: UI_ACTION_TIMEOUT_MS });
+    } catch {
+      return; // this template genuinely has no such variable
+    }
+    await this.typeInto(input, value, `template variable ${id}`);
+  }
+
+  /** Accept the final "Create Server?" confirmation dialog. */
+  private async confirmCreate(): Promise<void> {
     const confirm = this.page.getByRole('alertdialog');
     await expect(confirm).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await confirm.getByRole('button', { name: 'Create Server', exact: true }).click();
+    // By testid, not label: the button's text flips to "Creating..." once clicked.
+    await confirm.getByTestId('create-confirm-btn').click();
+  }
+
+  /** Wait for the success dialog and open the created server's dashboard. */
+  async openCreatedServer(): Promise<void> {
+    const success = this.page.getByRole('dialog').filter({ hasText: 'Server Created!' });
+    await expect(success).toBeVisible({ timeout: SERVER_START_TIMEOUT_MS });
+    // Visible label is "Go to dashboard"; the testid says open-dashboard.
+    await success.getByTestId('create-success-open-dashboard-btn').click();
   }
 }

@@ -17,26 +17,23 @@ export class LoginPage {
   }
 
   private get usernameInput(): Locator {
-    // TODO(testid): add data-testid="login-username-input" to LoginForm username Input
-    return this.dialog.getByLabel('Username');
+    return this.dialog.getByTestId('login-username-input');
   }
 
   private get passwordInput(): Locator {
-    // TODO(testid): add data-testid="login-password-input" to LoginForm password Input
-    return this.dialog.getByLabel('Password', { exact: true });
+    return this.dialog.getByTestId('login-password-input');
   }
 
   private get submitButton(): Locator {
-    // Footer submit button (type=submit, form="login-form"); label toggles to
-    // "Loading..." while pending.
-    // TODO(testid): add data-testid="login-submit-btn" to LoginDisplay submit Button
-    return this.dialog.getByRole('button', { name: /Sign In|Loading/ });
+    // Footer submit button (type=submit, form="login-form"). Addressed by testid, not
+    // label: since v1.1.0 a loading Button replaces its children with a loading label,
+    // so the accessible name flips from "Sign In" to "Loading..." mid-submit.
+    return this.dialog.getByTestId('login-submit-btn');
   }
 
   /** Banner button on the home page that opens the login dialog. */
   private get openLoginButton(): Locator {
-    // TODO(testid): add data-testid="login-open-btn" to LoginBanner Sign In button
-    return this.page.getByRole('button', { name: 'Sign In' }).first();
+    return this.page.getByTestId('login-open-btn');
   }
 
   async navigate(): Promise<void> {

@@ -10,10 +10,16 @@ import { CreateServerPage, HomePage } from '@pages/index';
  * cosy-game-api.jannekeipert.de default, which is backed by SteamGridDB). A hosted
  * outage reds exactly this row — intended, not a silent skip.
  *
- * The assertion is that a matching game result appears as a selectable option.
- * The released wizard's game list (5dba6e8) renders only the game name + template
- * count and surfaces NO artwork element, so artwork cannot be asserted structurally
- * here — see docs/KNOWN-ISSUES.md.
+ * The assertion is that a matching game result appears as a selectable entry AND
+ * that it carries real artwork.
+ *
+ * The artwork half is new in v1.1.0. The v1.0.3 wizard's game list rendered only the
+ * name + template count and set no image slot, so artwork could not be asserted
+ * structurally at all; the redesigned sidebar renders `game.logo_url`, falling back
+ * to a local console icon when the games API returns none. Asserting the `<img>`
+ * therefore proves the hosted API returned usable artwork, not merely that it
+ * answered — which is the same "hosted path really works" signal this spec exists
+ * for, one level stricter. A hosted outage reds this row; that is intended.
  */
 test.describe('@extended games-search', () => {
   runsOnlyWithInstall();
@@ -34,6 +40,10 @@ test.describe('@extended games-search', () => {
     await test.step('When: searching for "minecraft", Then: a matching game result appears', async () => {
       await create.searchGames('minecraft');
       await create.expectGameResult('minecraft');
+    });
+
+    await test.step('Then: the result carries artwork from the games API', async () => {
+      await create.expectGameArtwork('minecraft');
     });
   });
 });

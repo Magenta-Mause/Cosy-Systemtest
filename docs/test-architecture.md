@@ -34,8 +34,8 @@ Rules that keep the layers clean:
 - Specs import `test` / `expect` **only** from `@fixtures/index`, never from
   `@playwright/test`.
 - Specs contain **no selectors** — those live in page objects. Page objects use
-  `getByTestId` where ids exist; today none do, so they use accessible role/label
-  selectors, each flagged `// TODO(testid)` and catalogued in
+  `getByTestId` where ids exist (many do since v1.1.0); the remaining sites use
+  accessible role/label selectors, each flagged `// TODO(testid)` and catalogued in
   [testid-gaps.md](testid-gaps.md).
 - `COSY_BASE_URL` is read **only** in `helpers/constants.ts` (`resolveBaseURL()`).
 - Every timeout is a named constant in `helpers/constants.ts` — generous by design.
@@ -43,15 +43,23 @@ Rules that keep the layers clean:
 ## Page objects track the RELEASED frontend, not `main`
 
 The release channel installs the frontend *image pinned by the installer*, not
-`main` — currently **`sha-5dba6e8`** (installer v1.0.3). The deployed UI differs from
-`main` (e.g. the released create-server wizard uses a "Next Step" button and a game
-search on step 1, and the released file browser only allows writes inside a declared
-volume mount). **Derive selectors from the released revision**, e.g.
-`git show 5dba6e8:<path>` / `git ls-tree -r 5dba6e8 --name-only` in `Cosy-frontend` —
-not from `HEAD`. When a new Cosy release ships, re-derive the affected page objects
-against the new pinned revision. Once a release includes `data-testid`s (they are
-merged on `main` via Cosy-Frontend PR #118), switch the page objects to
-`getByTestId` and drop the corresponding `// TODO(testid)` rows.
+`main` — currently **`sha-2659b07`** (installer v1.1.0). **Derive selectors from the
+released revision**, e.g. `git show 2659b07:<path>` /
+`git ls-tree -r 2659b07 --name-only` in `Cosy-frontend` — not from `HEAD`.
+
+**When a new Cosy release ships, re-derive the affected page objects against the new
+pinned revision.** The v1.0.3 → v1.1.0 bump is the worked example of why this is not
+busywork: the create-server wizard's steps were reshuffled (game *and* template moved
+onto step 1, the server name moved to step 2), the file browser's per-row actions moved
+from inline buttons into a dropdown, and Button gained a loading state that REPLACES its
+label. The first two broke selectors outright; the third breaks any locator that matches
+a button by its label while a request is in flight. See docs/KNOWN-ISSUES.md.
+
+v1.1.0 is also the release that shipped the `data-testid`s from Cosy-Frontend PR #118,
+so the page objects now use `getByTestId` wherever an id exists. Only PR #118's Phase 1
+was implemented — the Phase 2 ids (users/invites, settings, metrics, game and template
+options) do not exist, so those sites keep role/label selectors and a `// TODO(testid)`
+marker. `docs/testid-gaps.md` is the live list.
 
 ## The install/teardown flow (owned by the workflow, not Playwright)
 

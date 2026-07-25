@@ -6,13 +6,16 @@ import { TEST_SERVER_MEMORY_LIMIT, TOSIOS_IMAGE } from '@helpers/constants';
  * Feature: files — real file operations through the released file browser: create
  * a directory, rename it, and delete it.
  *
- * Release constraint (frontend 5dba6e8): the file browser only exposes files that
+ * Release constraint (frontend 2659b07): the file browser only exposes files that
  * live inside a server's declared *volume mounts*; a server without a volume has a
  * read-only, empty browser (no New Directory / rename / delete / upload). The shared
  * tosios server has no volume, so this spec provisions its OWN server WITH a `/data`
- * volume mount through the UI wizard, then operates inside that volume. (The released
- * browser also has no file-edit affordance, so file create/edit is not covered — see
- * docs/testid-gaps.md.)
+ * volume mount through the UI wizard, then operates inside that volume.
+ *
+ * v1.1.0 moved the per-row actions into a "More actions" dropdown (they were inline
+ * icon buttons before) and gated writes behind CHANGE_SERVER_FILES. It also ADDED file
+ * editing, Change Permissions, Upload Archive and Download Directory — none of which
+ * are covered yet; see docs/testid-gaps.md.
  */
 test.describe('@core files', () => {
   runsOnlyWithInstall();

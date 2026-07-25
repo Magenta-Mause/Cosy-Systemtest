@@ -5,10 +5,12 @@ import { UI_ACTION_TIMEOUT_MS } from '@helpers/constants';
 /**
  * The home page: the pixel-art "server yard". Servers render as clickable houses;
  * a construction plot opens the create-server wizard. The left options banner
- * (`#banner`) expands on interaction to reveal the user menu and logout.
+ * expands on interaction to reveal the user menu and logout.
  *
- * No `data-testid`s exist yet — selectors lean on aria-labels the components
- * already expose (see docs/testid-gaps.md).
+ * PERMISSION GATE (v1.1.0): the construction plot is rendered only when the user has
+ * `canCreateGameServers`. A QUOTA_USER without it has no plot at all and a disabled
+ * right-click menu entry — so any test user that needs to create a server must be
+ * provisioned with `can_create_game_servers: true`.
  */
 export class HomePage {
   constructor(private readonly page: Page) {}
@@ -19,17 +21,19 @@ export class HomePage {
 
   /** The construction plot link that opens the create-server modal. */
   private get constructionPlot(): Locator {
-    // Uses aria.createNewGameServer = "Create a new Game Server Configuration".
-    // TODO(testid): add data-testid="create-server-plot" to ConstructionPlaceHouse link
-    return this.page.getByRole('link', { name: 'Create a new Game Server Configuration' });
+    return this.page.getByTestId('create-server-plot');
   }
 
   /** A server house by its name (aria.gameServer = "Game Server Configuration: {name}"). */
   serverHouse(serverName: string): Locator {
-    // TODO(testid): add data-testid={`server-house-${uuid}`} to the server house link
-    return this.page.getByRole('link', {
-      name: new RegExp(`Game Server Configuration: ${escapeRegExp(serverName)}`),
-    });
+    // `data-testid="server-house"` is STATIC (one per house, not per uuid), so it
+    // still has to be narrowed by the house's aria-label
+    // (aria.gameServer = "Game Server Configuration: {name}").
+    return this.page.getByTestId('server-house').and(
+      this.page.getByRole('link', {
+        name: new RegExp(`Game Server Configuration: ${escapeRegExp(serverName)}`),
+      }),
+    );
   }
 
   async openCreateServerModal(): Promise<void> {
@@ -47,13 +51,13 @@ export class HomePage {
 
   /** True once the (only-when-unauthenticated) login banner is gone. */
   async expectAuthenticated(): Promise<void> {
-    await expect(this.page.getByRole('button', { name: 'Sign In' })).toHaveCount(0, {
+    await expect(this.page.getByTestId('login-open-btn')).toHaveCount(0, {
       timeout: UI_ACTION_TIMEOUT_MS,
     });
   }
 
   async expectLoggedOut(): Promise<void> {
-    await expect(this.page.getByRole('button', { name: 'Sign In' }).first()).toBeVisible({
+    await expect(this.page.getByTestId('login-open-btn')).toBeVisible({
       timeout: UI_ACTION_TIMEOUT_MS,
     });
   }
@@ -64,15 +68,13 @@ export class HomePage {
    * banner to expand before clicking logout.
    */
   async logout(): Promise<void> {
-    // TODO(testid): add data-testid="options-banner" to OptionsBannerDropdown root
-    await this.page.locator('#banner').click();
-    // LogOutButton exposes aria-label "Log Out".
-    // TODO(testid): add data-testid="logout-btn" to LogOutButton
-    await this.page.getByRole('button', { name: 'Log Out' }).click();
-    // Confirm in the LogOutAlertDialog (confirm button label "Log Out").
+    await this.page.getByTestId('options-banner').click();
+    await this.page.getByTestId('logout-btn').click();
+    // Confirm in the LogOutAlertDialog. Both buttons used to be called "Log Out",
+    // which the testids now disambiguate outright.
     const dialog = this.page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await dialog.getByRole('button', { name: 'Log Out' }).click();
+    await dialog.getByTestId('logout-confirm-btn').click();
     await this.expectLoggedOut();
   }
 }

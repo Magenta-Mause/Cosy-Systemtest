@@ -161,27 +161,46 @@ export class UsersPage {
   }
 
   /**
-   * Set a quota-user's docker limits via the row menu → "Edit Resource Limits"
-   * (the released UpdateDockerLimitsModal). `cpu` is plain cores; `memoryMiB` is the
-   * NUMERIC part only — `#docker-memory-limit` is a compound number+unit widget
-   * (number input + a MiB/GiB Select that defaults to MiB, emitting `${n}${unit}`),
-   * exactly like the wizard's RAM field, so typing "512MiB" into it would be rejected.
+   * Open a user's permissions modal (row menu → "Change Permissions").
+   *
+   * RENAMED IN v1.1.0. There used to be a dedicated "Edit Resource Limits" menu item
+   * opening an UpdateDockerLimitsModal. That item is gone: resource limits were folded
+   * into ChangePermissionsModal alongside the new `canCreateGameServers` toggle, and
+   * the input ids changed from `#docker-{cpu,memory}-limit` to
+   * `#permissions-{cpu,memory}-limit`. The old `updateDockerLimitsDialog` i18n block
+   * still exists and still reads "Edit Resource Limits", but nothing opens it — which
+   * is why matching on that string times out rather than failing fast.
+   *
+   * The item is hidden unless the acting user may update this user's limits, so a
+   * timeout here can also mean a permission problem rather than a renamed label.
+   */
+  private async openPermissionsModal(username: string): Promise<Locator> {
+    await this.openRowMenu(username);
+    // TODO(testid): add data-testid="user-change-permissions" to UserRow's action item
+    await this.page.getByRole('menuitem', { name: 'Change Permissions' }).click();
+    const dialog = this.dialog;
+    await expect(dialog.getByRole('heading', { name: 'Change Permissions' })).toBeVisible({
+      timeout: UI_ACTION_TIMEOUT_MS,
+    });
+    return dialog;
+  }
+
+  /**
+   * Set a quota-user's docker limits via the row menu → "Change Permissions".
+   * `cpu` is plain cores; `memoryMiB` is the NUMERIC part only —
+   * `#permissions-memory-limit` is a compound number+unit widget (number input + a
+   * MiB/GiB Select that defaults to MiB, emitting `${n}${unit}`), exactly like the
+   * wizard's RAM field, so typing "512MiB" into it would be rejected.
    * Save button is "Save".
    */
   async setQuota(username: string, opts: { cpu?: string; memoryMiB?: string }): Promise<void> {
-    await this.openRowMenu(username);
-    // TODO(testid): add data-testid="user-edit-limits" to UserRow editDockerLimits item
-    await this.page.getByRole('menuitem', { name: 'Edit Resource Limits' }).click();
-    const dialog = this.dialog;
-    await expect(dialog.getByRole('heading', { name: 'Edit Resource Limits' })).toBeVisible({
-      timeout: UI_ACTION_TIMEOUT_MS,
-    });
+    const dialog = await this.openPermissionsModal(username);
     if (opts.cpu !== undefined) {
-      await this.typeNumber(dialog.locator('#docker-cpu-limit'), opts.cpu, 'CPU limit');
+      await this.typeNumber(dialog.locator('#permissions-cpu-limit'), opts.cpu, 'CPU limit');
     }
     if (opts.memoryMiB !== undefined) {
       await this.typeNumber(
-        dialog.locator('#docker-memory-limit'),
+        dialog.locator('#permissions-memory-limit'),
         opts.memoryMiB,
         'memory limit',
       );
@@ -191,9 +210,9 @@ export class UsersPage {
   }
 
   /**
-   * Verify a quota user's CPU-cores limit persisted, by reopening the "Edit Resource
-   * Limits" modal and reading the CPU input (the modal seeds it from the user's saved
-   * `docker_max_cpu_cores`). Cancels without changes.
+   * Verify a quota user's CPU-cores limit persisted, by reopening the "Change
+   * Permissions" modal and reading the CPU input (the modal seeds it from the user's
+   * saved `docker_max_cpu_cores`). Cancels without changes.
    *
    * Retries around a RELOAD: the modal seeds from the `users` redux slice, which is
    * refreshed by a fetch that can lag the PATCH, so a straight reopen may still show
@@ -202,10 +221,8 @@ export class UsersPage {
   async expectQuotaCpu(username: string, cpuCores: string): Promise<void> {
     await expect(async () => {
       await this.page.reload();
-      await this.openRowMenu(username);
-      await this.page.getByRole('menuitem', { name: 'Edit Resource Limits' }).click();
-      const dialog = this.dialog;
-      await expect(dialog.locator('#docker-cpu-limit')).toHaveValue(cpuCores, {
+      const dialog = await this.openPermissionsModal(username);
+      await expect(dialog.locator('#permissions-cpu-limit')).toHaveValue(cpuCores, {
         timeout: UI_ACTION_TIMEOUT_MS,
       });
       await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();

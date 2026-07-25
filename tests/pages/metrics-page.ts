@@ -8,6 +8,11 @@ import { METRICS_RENDER_TIMEOUT_MS } from '@helpers/constants';
  * name ("CPU", "Memory", …). The SVG chart itself carries no role/testid, so we
  * assert on the series titles (presence) and poll for a rendered recharts path as
  * evidence that data points have accrued (InfluxDB-backed; metrics need time).
+ *
+ * v1.1.0 made metrics lazy (fd721cd): they are fetched only when a metrics widget is
+ * in the shown layout and the user holds READ_SERVER_METRICS, and a "Loading metrics …"
+ * overlay covers the cards until the first fetch resolves. Wait past it before
+ * concluding a series is missing.
  */
 export class MetricsPage {
   constructor(private readonly page: Page, private readonly uuid: string) {}
@@ -24,6 +29,9 @@ export class MetricsPage {
 
   /** Assert the CPU and Memory series are present (series presence, not values). */
   async expectSeriesPresent(): Promise<void> {
+    await expect(this.page.getByText(/Loading metrics/i)).toHaveCount(0, {
+      timeout: METRICS_RENDER_TIMEOUT_MS,
+    });
     await expect(this.seriesTitle('CPU').first()).toBeVisible({
       timeout: METRICS_RENDER_TIMEOUT_MS,
     });
