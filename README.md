@@ -8,9 +8,11 @@ matrix.
 
 **Phase 2** (this state): the full feature matrix. Phase 1 delivered the install →
 core lifecycle → uninstall path (`@core`); Phase 2 adds the remaining feature specs
-(`@extended`). Still release channel, nightly + manual trigger, results as a GitHub
-artifact (reporting dry-run); OTLP/SigNoz reporting and the staging channel come in
-later phases. See [`Cosy/PLAN-systemtest.md`](https://github.com/Magenta-Mause/Cosy)
+(`@extended`). Nightly + manual trigger, results as a GitHub artifact (reporting
+dry-run); a manual run can pin a specific backend/frontend image tag to verify a fix
+before release (recorded as the `staging` channel — see
+[below](#testing-a-specific-not-yet-released-build)). OTLP/SigNoz reporting and the
+automatic staging trigger (`repository_dispatch` on image push) come in later phases. See [`Cosy/PLAN-systemtest.md`](https://github.com/Magenta-Mause/Cosy)
 for the full roadmap.
 
 ## Features covered
@@ -94,7 +96,9 @@ listable and typecheckable on any machine.
 | `INSTALL_LOG` | Path to the tee'd installer stdout (admin creds source; gates all specs) | — (specs skip if unset) |
 | `INSTALL_DIR` | Cosy install dir — `.env` fallback is read from `${INSTALL_DIR}/config/.env` | `/opt/cosy` |
 | `INSTALL_ENV_FILE` | Runner-readable copy of the installed `.env`, preferred over `INSTALL_DIR` (the installed file is root-owned chmod 600, so CI copies it) | — (falls back to `INSTALL_DIR`) |
-| `COSY_CHANNEL` | Channel label written into `results/summary.json` | `release` |
+| `COSY_CHANNEL` | Channel label written into `results/summary.json` (`release`, or `staging` when a run pinned an image tag) | `release` |
+| `COSY_BACKEND_TAG` | Installed backend image tag, recorded as `versions.backend` in the summary | — (`null`) |
+| `COSY_FRONTEND_TAG` | Installed frontend image tag, recorded as `versions.frontend` in the summary | — (`null`) |
 | `CI` | Enables CI reporters (github/html/json) + retries | — |
 
 ## How it runs in CI
@@ -104,6 +108,25 @@ checkout → Node 22 → `npm ci` → `playwright install --with-deps chromium` 
 Cosy → poll health (≤10 min) → run the suite → uninstall + assert clean teardown →
 upload the report and results. The runner exits 0 even when features fail (metrics
 are truth); the job only goes red on infrastructure errors.
+
+### Testing a specific, not-yet-released build
+
+A manual run takes three optional inputs — `backend_tag`, `frontend_tag` (ghcr image
+tags such as `sha-abc1234`) and `config_ref` (a git ref of `Magenta-Mause/Cosy` the
+compose/config files are fetched from). Each is forwarded to `install_cosy.sh` as
+`--backend-tag` / `--frontend-tag` / `--config-ref` only when non-empty, so leaving
+the form untouched installs the published, pinned versions.
+
+```bash
+gh workflow run systemtest.yml --repo Magenta-Mause/Cosy-Systemtest \
+  -f reason="verify backend fix #123" \
+  -f backend_tag=sha-abc1234
+```
+
+Any override switches the summary's `channel` from `release` to `staging`. Whatever
+was installed is read back out of the generated `.env` and stored in
+`results/summary.json` under `versions` (`backend` / `frontend`), so every stored
+result says which build it tested.
 
 ## Documentation
 

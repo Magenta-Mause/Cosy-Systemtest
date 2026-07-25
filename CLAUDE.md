@@ -26,7 +26,9 @@ npx playwright test --list   # lists all specs even with no install present
 | `INSTALL_DIR` | Install dir; `.env` fallback read from `${INSTALL_DIR}/config/.env` | `/opt/cosy` |
 | `INSTALL_ENV_FILE` | Runner-readable copy of the installed `.env` (preferred over `INSTALL_DIR`; CI copies it because the installed file is root-owned chmod 600) | — (falls back to `INSTALL_DIR`) |
 | `SYSTEMTEST_HEAVY` | Enables quarantined heavy specs (`rcon` — needs a full Minecraft boot, never succeeds on a GitHub runner; see docs/KNOWN-ISSUES.md) | — (heavy specs skip) |
-| `COSY_CHANNEL` | Channel label in `results/summary.json` | `release` |
+| `COSY_CHANNEL` | Channel label in `results/summary.json`; the workflow sets `staging` when a manual run pinned an image tag, else `release` | `release` |
+| `COSY_BACKEND_TAG` | Installed backend image tag, written to `summary.json` → `versions.backend` (workflow reads it back out of the installed `.env`) | — (`null` in the summary) |
+| `COSY_FRONTEND_TAG` | Installed frontend image tag → `versions.frontend` | — (`null` in the summary) |
 | `CI` | CI reporters + retries | — |
 
 ## Hard conventions (do not break)
@@ -57,6 +59,11 @@ npx playwright test --list   # lists all specs even with no install present
    OTLP push is a Phase-3 stub (`pushMetrics()` throws) — do not wire it in Phase 1.
 9. **Install/uninstall belong to the workflow**, not to Playwright. `uninstall` is a
    workflow-appended row in `results/summary.json`, not a spec.
+10. **A result must be attributable to a build.** The workflow's `backend_tag` /
+    `frontend_tag` / `config_ref` dispatch inputs are forwarded to `install_cosy.sh`
+    only when non-empty; the effective tags are then read back from the installed
+    `.env` into `summary.json` (`versions`), and any override flips `channel` to
+    `staging`. Never drop those fields — a red row is meaningless without them.
 
 ## Layout
 

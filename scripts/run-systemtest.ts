@@ -27,8 +27,19 @@ interface FeatureResult {
   durationSeconds: number;
 }
 
+/**
+ * Which build was under test. The CI workflow reads the effective image tags back
+ * out of the installed `.env` and exports them; locally they are usually absent,
+ * hence `null` rather than a guess.
+ */
+interface Versions {
+  backend: string | null;
+  frontend: string | null;
+}
+
 interface Summary {
   channel: string;
+  versions: Versions;
   generatedAt: string;
   runUrl: string | null;
   features: FeatureResult[];
@@ -114,9 +125,20 @@ function parseReport(): FeatureResult[] {
   return results.sort((a, b) => a.feature.localeCompare(b.feature));
 }
 
+/** Empty strings count as absent — an unset CI env var arrives as `''`, not undefined. */
+function optionalEnv(name: string): string | null {
+  const value = process.env[name]?.trim();
+  return value ? value : null;
+}
+
 function writeSummary(features: FeatureResult[]): Summary {
   const summary: Summary = {
-    channel: process.env.COSY_CHANNEL ?? 'release',
+    // `staging` when the workflow pinned an image tag, `release` otherwise.
+    channel: optionalEnv('COSY_CHANNEL') ?? 'release',
+    versions: {
+      backend: optionalEnv('COSY_BACKEND_TAG'),
+      frontend: optionalEnv('COSY_FRONTEND_TAG'),
+    },
     generatedAt: new Date().toISOString(),
     runUrl: buildRunUrl(),
     features,
@@ -128,6 +150,10 @@ function writeSummary(features: FeatureResult[]): Summary {
 function printTable(summary: Summary): void {
   const icon = { passed: 'PASS', failed: 'FAIL', skipped: 'SKIP' } as const;
   console.log(`\n=== Cosy systemtest results (channel: ${summary.channel}) ===`);
+  console.log(
+    `  backend: ${summary.versions.backend ?? 'unknown'}  ` +
+      `frontend: ${summary.versions.frontend ?? 'unknown'}`,
+  );
   for (const f of summary.features) {
     console.log(`  ${icon[f.status]}  ${f.feature.padEnd(20)} ${f.durationSeconds}s`);
   }

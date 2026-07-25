@@ -12,6 +12,22 @@ on:
         description: "Why this manual run was triggered (shows up in the run log)"
         required: false
         default: "manual run"
+      # Version pinning: verify a fix BEFORE it is released. install_cosy.sh takes
+      # --backend-tag / --frontend-tag / --config-ref (Cosy PR #75); each input is
+      # passed through only when non-empty, so an untouched form installs exactly
+      # the pinned, published versions (release channel).
+      backend_tag:
+        description: "Backend ghcr image tag, e.g. `sha-abc1234`; leave empty to test the released pinned version"
+        required: false
+        default: ""
+      frontend_tag:
+        description: "Frontend ghcr image tag, e.g. `sha-abc1234`; leave empty to test the released pinned version"
+        required: false
+        default: ""
+      config_ref:
+        description: "Git ref of Magenta-Mause/Cosy the compose/config files are fetched from, e.g. `main`; leave empty to use the installer default"
+        required: false
+        default: ""
 
 # Release runs must not cancel each other: a nightly and a manual run should both
 # complete rather than the newer one killing the older (unlike staging later).
@@ -29,7 +45,9 @@ jobs:
       # Where install_cosy.sh (docker) puts everything by default.
       INSTALL_DIR: /opt/cosy
       COSY_BASE_URL: http://localhost:8080
-      COSY_CHANNEL: release
+      # COSY_CHANNEL is deliberately NOT set here: a job-level `env` value would
+      # shadow anything a step writes to $GITHUB_ENV. The "Install Cosy" step sets
+      # it to `release` or `staging` depending on whether a tag override was given.
 
     steps:
       - name: Log trigger reason
@@ -63,10 +81,40 @@ jobs:
       # admin credentials. We capture the installer's exit code WITHOUT letting the
       # pipe (pipefail is on by default here) abort the job — the health poll below
       # is our real gate, since the script's own 180s cap is the known flakiness.
+      #
+      # The optional workflow_dispatch tag overrides are appended as flags ONLY when
+      # non-empty (an empty `--backend-tag ''` would install a nonexistent image), and
+      # they are read from step env rather than interpolated into the script, so an
+      # input can never break out of the argument list. Any override means we are no
+      # longer testing the published product: the channel flips to `staging`.
       - name: Install Cosy
+        env:
+          INPUT_BACKEND_TAG: ${{ inputs.backend_tag }}
+          INPUT_FRONTEND_TAG: ${{ inputs.frontend_tag }}
+          INPUT_CONFIG_REF: ${{ inputs.config_ref }}
         run: |
+          args=(docker --default --port 8080 --domain localhost)
+          channel="release"
+
+          if [ -n "$INPUT_BACKEND_TAG" ]; then
+            args+=(--backend-tag "$INPUT_BACKEND_TAG")
+            channel="staging"
+          fi
+          if [ -n "$INPUT_FRONTEND_TAG" ]; then
+            args+=(--frontend-tag "$INPUT_FRONTEND_TAG")
+            channel="staging"
+          fi
+          if [ -n "$INPUT_CONFIG_REF" ]; then
+            args+=(--config-ref "$INPUT_CONFIG_REF")
+            channel="staging"
+          fi
+
+          echo "Channel: ${channel}"
+          echo "Installer arguments: ${args[*]}"
+          echo "COSY_CHANNEL=${channel}" >> "$GITHUB_ENV"
+
           set +e
-          sudo bash install_cosy.sh docker --default --port 8080 --domain localhost 2>&1 | tee install.log
+          sudo bash install_cosy.sh "${args[@]}" 2>&1 | tee install.log
           code=${PIPESTATUS[0]}
           set -e
           echo "Installer exited with code ${code}."
@@ -99,6 +147,30 @@ jobs:
         run: |
           sudo install -m 0644 -o "$(id -un)" /opt/cosy/config/.env "$RUNNER_TEMP/cosy-install.env"
           echo "INSTALL_ENV_FILE=$RUNNER_TEMP/cosy-install.env" >> "$GITHUB_ENV"
+
+      # A stored result must say WHICH build it tested, otherwise a red row from a
+      # pinned pre-release run is indistinguishable from a red released product. The
+      # installer resolves the effective tags into the generated .env, so read them
+      # back from there instead of echoing what we passed in (defaults included).
+      - name: Record installed versions
+        run: |
+          # `|| true`: a missing key must yield "unknown", not abort the step under
+          # `set -e`/`pipefail` (grep exits 1 when it matches nothing).
+          read_tag() {
+            grep -E "^$1=" "$INSTALL_ENV_FILE" | tail -n 1 | cut -d= -f2- || true
+          }
+          backend="$(read_tag BACKEND_IMAGE_TAG)"
+          frontend="$(read_tag FRONTEND_IMAGE_TAG)"
+          [ -n "$backend" ] || backend="unknown"
+          [ -n "$frontend" ] || frontend="unknown"
+
+          echo "Installed backend image tag:  ${backend}"
+          echo "Installed frontend image tag: ${frontend}"
+          echo "Channel: ${COSY_CHANNEL:-release}"
+
+          # Consumed by scripts/run-systemtest.ts → results/summary.json (versions).
+          echo "COSY_BACKEND_TAG=${backend}" >> "$GITHUB_ENV"
+          echo "COSY_FRONTEND_TAG=${frontend}" >> "$GITHUB_ENV"
 
       # Warm the game-server image BEFORE the suite. Two reasons:
       #  1. No spec then pays for a cold pull, so the server-start budgets measure the
