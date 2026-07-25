@@ -123,7 +123,15 @@ failed push of *either* exits **1** (see convention 8).
     it groups by `cosy.systemtest.trace_id` and carries a SigNoz context link
     (`contextLinks.linksData`, url `/trace/{{_cosy.systemtest.trace_id}}`) — do not drop
     either, they are the only path from the dashboard into a run's trace. See the
-    README's "The SigNoz dashboard" section. It also groups by
+    README's "The SigNoz dashboard" section. Its **first** groupBy entry is
+    `cosy.systemtest.run_at` — the run's timestamp, ISO 8601 UTC at second precision —
+    and it is also the table's `orderBy` (`desc`). Both positions are deliberate: SigNoz
+    builds a table's columns in groupBy order (the backend emits `labelsArray` in the
+    SELECT order it derives from groupBy), so leading with the timestamp makes the table
+    read like a log; and an ISO 8601 UTC string of uniform width sorts lexicographically
+    in exactly chronological order, which is why it can be the sort key at all. Do not
+    sort this table on `cosy.systemtest.run_url` again — that ordered correctly only
+    while GitHub run ids happened to be equal-width and monotonic. It also groups by
     `cosy.systemtest.report_url` and carries the matching "Watch this run's report"
     context link — see convention 16.
 14. **One run = one trace, and a skip is never a green span.** The same `--push-only`

@@ -466,6 +466,19 @@ function attribute(key: string, value: string): OtlpAttribute {
   return { key, value: { stringValue: value } };
 }
 
+/**
+ * ISO 8601 UTC, second precision — `2026-07-25T15:42:15Z`.
+ *
+ * The width and the zone are load-bearing, not cosmetic: the dashboard's run table
+ * SORTS on this string, and a lexicographic sort equals a chronological one only
+ * while every value has the same shape and the same zone. Milliseconds (variable in
+ * some producers) or a local offset would break that quietly — the rows would still
+ * render, just in the wrong order.
+ */
+function isoSeconds(epochMs: number): string {
+  return `${new Date(epochMs).toISOString().slice(0, 19)}Z`;
+}
+
 function intAttribute(key: string, value: number): OtlpAttribute {
   return { key, value: { intValue: String(Math.trunc(value)) } };
 }
@@ -504,6 +517,13 @@ function resourceAttributes(summary: Summary, traceId: string): OtlpAttribute[] 
     attribute('cosy.backend.image_tag', summary.versions.backend ?? 'unknown'),
     attribute('cosy.frontend.image_tag', summary.versions.frontend ?? 'unknown'),
     attribute('cosy.systemtest.trace_id', traceId),
+    // WHEN the run reported, as a fixed-width ISO 8601 UTC string. This is
+    // `summary.generatedAt` — the moment the summary was written, right after the
+    // suite — not the moment the suite started. It is the run table's timestamp
+    // column AND its sort key: an ISO 8601 UTC string sorts lexicographically in
+    // exactly chronological order, which the previous sort (on the GitHub run URL)
+    // only did by accident of run ids being equal-width and monotonic.
+    attribute('cosy.systemtest.run_at', isoSeconds(Date.parse(summary.generatedAt))),
   ];
   // Absent outside GitHub Actions — omit rather than invent a placeholder link.
   if (summary.runUrl) attributes.push(attribute('cosy.systemtest.run_url', summary.runUrl));

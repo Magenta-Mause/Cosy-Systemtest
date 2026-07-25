@@ -215,9 +215,17 @@ platform**. Keep the prefix on every metric added here — do not shorten it bac
 Resource attributes on every data point — and on every span of the run's trace:
 `service.name=cosy-systemtest`, `deployment.environment=<channel>`,
 `cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_url`,
-`cosy.systemtest.report_url` and `cosy.systemtest.trace_id` — so any point names the
-build it tested, links back to the GitHub run, opens the run's hosted HTML report
-(videos and traces included), and names the SigNoz trace of the same run.
+`cosy.systemtest.report_url`, `cosy.systemtest.trace_id` and `cosy.systemtest.run_at` —
+so any point names the build it tested, links back to the GitHub run, opens the run's
+hosted HTML report (videos and traces included), names the SigNoz trace of the same run,
+and says when the run reported.
+
+`cosy.systemtest.run_at` is `summary.generatedAt` (the moment the summary was written,
+right after the suite) rendered as **ISO 8601 UTC at second precision** —
+`2026-07-25T15:42:15Z`. The format is a contract, not a style choice: the "Runs in
+window" table both shows this column and sorts on it, and a lexicographic sort equals a
+chronological one only while every value has the same width and the same zone. Do not
+switch it to milliseconds or to a local offset.
 
 **How a skip is represented, and why.** A skipped feature is *untested*, which is
 neither a pass nor a failure. Reporting it as `1` would claim a feature works when
@@ -370,7 +378,7 @@ What is on it:
 | Release channel — current state | Is the published product healthy *right now*? Passing / failing / **unexpected failures** / skipped / features reported / hours since the last run |
 | Feature × time — release | *When* did a feature break, and for how long? A stacked band per failing feature, plus per-feature status and skip history |
 | Duration trends | Is anything getting slower? Per-feature duration over time, suite total, slowest feature, count over 120 s |
-| Build under test & drill-down | Which images produced this result, and what did the run look like? Per-run table of `cosy.backend.image_tag` / `cosy.frontend.image_tag` / the GitHub run URL / `cosy.systemtest.trace_id` — so a red cell is attributable to a build, one click from the report and video, and one click from **"Open this run's trace"** (see below) |
+| Build under test & drill-down | Which images produced this result, when did it run, and what did the run look like? Per-run table of `cosy.systemtest.run_at` (the sort key, newest first) / `cosy.backend.image_tag` / `cosy.frontend.image_tag` / the GitHub run URL / `cosy.systemtest.trace_id` — so a red cell is attributable to a build and a time, one click from the report and video, and one click from **"Open this run's trace"** (see below) |
 | Staging channel | Will the *next* release break this? Same view for pre-release `sha-<short>` builds |
 | Known expected reds & skips | The two documented product-bug reds and the one intentional skip, stated explicitly rather than left to look like breakage |
 

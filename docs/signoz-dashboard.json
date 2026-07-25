@@ -1978,8 +1978,8 @@
     },
     {
       "id": "t-runs",
-      "title": "Runs in window — image tags, report, GitHub run & trace",
-      "description": "One row per run in the dashboard's time range, carrying the resource attributes every data point is tagged with. A red cell in the matrix above is attributable to the backend/frontend image tag here; cosy.systemtest.report_url opens that run's Playwright HTML report — the videos and traces of what the browser actually did; the run URL leads to the GitHub Actions run (job log, diagnostics artifact); and cosy.systemtest.trace_id identifies the OTLP trace the same run emitted — the per-feature timeline (what ran when, how long, which failed and why).\n\nDRILL-DOWN: click a row and choose \"Watch this run's report\" to open the hosted report, or \"Open this run's trace\" to jump to /trace/<id> in SigNoz. Both values are also shown as columns, so they can be copied if the context menu is unavailable.\n\nThe report URL is derived from the channel and the GitHub run id (<host>/<channel>/<run-id>/index.html), so it stays guessable from the run URL next to it. Reports expire after 30 days, so rows older than that show a link that 404s — expected, not a fault.\n\n(Builder query rather than PromQL: the attribute keys contain dots, which PromQL label names cannot express.)",
+      "title": "Runs in window — run time, image tags, report, GitHub run & trace",
+      "description": "One row per run in the dashboard's time range, carrying the resource attributes every data point is tagged with. The first column, cosy.systemtest.run_at, is WHEN the run reported — the moment its summary was written, right after the suite — as an ISO 8601 UTC timestamp at second precision, and the table is sorted by it, newest first. That format sorts lexicographically in exactly chronological order, so the same column is both the readable timestamp and a correct sort key (it replaced a sort on the GitHub run URL, which only ordered correctly for as long as run ids stayed equal-width and monotonic). A red cell in the matrix above is attributable to the backend/frontend image tag here; cosy.systemtest.report_url opens that run's Playwright HTML report — the videos and traces of what the browser actually did; the run URL leads to the GitHub Actions run (job log, diagnostics artifact); and cosy.systemtest.trace_id identifies the OTLP trace the same run emitted — the per-feature timeline (what ran when, how long, which failed and why).\n\nDRILL-DOWN: click a row and choose \"Watch this run's report\" to open the hosted report, or \"Open this run's trace\" to jump to /trace/<id> in SigNoz. Both values are also shown as columns, so they can be copied if the context menu is unavailable.\n\nThe report URL is derived from the channel and the GitHub run id (<host>/<channel>/<run-id>/index.html), so it stays guessable from the run URL next to it. Reports expire after 30 days, so rows older than that show a link that 404s — expected, not a fault.\n\n(Builder query rather than PromQL: the attribute keys contain dots, which PromQL label names cannot express.)",
       "panelTypes": "table",
       "query": {
         "id": "t-runs-q",
@@ -2007,6 +2007,11 @@
               },
               "functions": [],
               "groupBy": [
+                {
+                  "dataType": "string",
+                  "key": "cosy.systemtest.run_at",
+                  "type": "tag"
+                },
                 {
                   "dataType": "string",
                   "key": "channel",
@@ -2043,7 +2048,7 @@
               "limit": null,
               "orderBy": [
                 {
-                  "columnName": "cosy.systemtest.run_url",
+                  "columnName": "cosy.systemtest.run_at",
                   "order": "desc"
                 }
               ],
