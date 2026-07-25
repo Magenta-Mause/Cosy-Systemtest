@@ -2041,7 +2041,12 @@
               "having": [],
               "legend": "",
               "limit": null,
-              "orderBy": [],
+              "orderBy": [
+                {
+                  "columnName": "cosy.systemtest.run_url",
+                  "order": "desc"
+                }
+              ],
               "selectColumns": []
             }
           ],
