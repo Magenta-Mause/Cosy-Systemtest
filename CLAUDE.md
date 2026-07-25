@@ -34,7 +34,12 @@ npx playwright test --list   # lists all specs even with no install present
 | `OTEL_INGEST_URL` | Base URL of the authenticated OTLP-HTTP ingest (SigNoz collector); the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics` **and** `${OTEL_INGEST_URL}/v1/traces`. CI sets `https://otel-ingest.jannekeipert.de` (overridable via the `OTEL_INGEST_URL` repo variable) | — (push skipped) |
 | `OTEL_INGEST_USER` | HTTP Basic user for the ingest (GitHub secret) | — (push skipped) |
 | `OTEL_INGEST_PASSWORD` | HTTP Basic password for the ingest (GitHub secret) | — (push skipped) |
+| `REPORTS_BASE_URL` | Host serving the uploaded Playwright HTML reports. Set **job-level** in the workflow (overridable via the repo variable of the same name) because the *suite* step is where `summary.json`'s `reportUrl` is computed — setting it on the push step alone silently does nothing | `https://systemtest-reports.jannekeipert.de` |
 | `CI` | CI reporters + retries | — |
+
+Workflow-only (the publish step reads them; the runner never does):
+`MINIO_REPORTS_ENDPOINT` (repo variable, default `https://minio-cli.jannekeipert.de`)
+and the `MINIO_REPORTS_ACCESS_KEY` / `MINIO_REPORTS_SECRET_KEY` repo secrets.
 
 **The push is all-or-nothing on config:** unless all three `OTEL_INGEST_*` are set and
 non-empty, the runner logs one INFO line and exits 0 — local runs and forks are
@@ -118,7 +123,9 @@ failed push of *either* exits **1** (see convention 8).
     it groups by `cosy.systemtest.trace_id` and carries a SigNoz context link
     (`contextLinks.linksData`, url `/trace/{{_cosy.systemtest.trace_id}}`) — do not drop
     either, they are the only path from the dashboard into a run's trace. See the
-    README's "The SigNoz dashboard" section.
+    README's "The SigNoz dashboard" section. It also groups by
+    `cosy.systemtest.report_url` and carries the matching "Watch this run's report"
+    context link — see convention 16.
 14. **One run = one trace, and a skip is never a green span.** The same `--push-only`
     step that pushes the metrics also POSTs one OTLP trace to `/v1/traces`: a root span
     `cosy-systemtest run (<channel>)` (ERROR if any feature failed, attributes
@@ -150,6 +157,29 @@ failed push of *either* exits **1** (see convention 8).
     are NOT skipped in the suite and NOT hidden on the dashboard, which shows their
     expected counts explicitly. When you add or remove such an exclusion, change the
     rule, the panel and `docs/KNOWN-ISSUES.md` in one commit.
+16. **The hosted report URL is DERIVED, and the layout on disk must match it.** The
+    workflow's "Publish Playwright report" step mirrors `playwright-report/` to
+    `s3://cosy-systemtest-reports/<channel>/<github-run-id>/`, and
+    `buildReportUrl()` independently composes
+    `${REPORTS_BASE_URL}/<channel>/<GITHUB_RUN_ID>/index.html` for `summary.json`'s
+    `reportUrl` → the `cosy.systemtest.report_url` resource attribute. **Nothing
+    connects the two but this convention** — change one path and every dashboard link
+    404s while looking perfectly healthy. If you change the layout, change both in the
+    same commit. Keep `/index.html` in the URL (MinIO serves objects, not directories)
+    and keep the prefix per-run-id, not per-attempt: a re-run overwrites, because
+    `run_url` has no attempt component either.
+    - **The publish step must never fail the job.** It handles its own errors and exits
+      0 with a `::warning::`; the report is a convenience on top of the artifacts, which
+      are still uploaded. This is the deliberate opposite of the OTLP push (convention
+      8), which *is* the signal and therefore *does* fail the job.
+    - **It runs before the push step**, so the URL the metrics carry is already live.
+    - **Only `playwright-report/` is published.** `results/` — stack diagnostics,
+      container logs, `dmesg` — stays a private GitHub artifact; the bucket is public.
+    - Bucket, lifecycle (30-day expiry), the write-only credential and the ingress are
+      defined in `Janne6565/cluster-deployment` (`infrastructure/minio.yaml`,
+      `infrastructure/cosy-systemtest-reports-ingress.yaml`), not here. The CI key can
+      `PutObject` into that one bucket and nothing else — do not "fix" a permission
+      error by widening it; expiry is the server's job, never CI's.
 
 ## Layout
 

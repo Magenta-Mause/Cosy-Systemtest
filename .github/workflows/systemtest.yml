@@ -49,6 +49,13 @@ jobs:
       # COSY_CHANNEL is deliberately NOT set here: a job-level `env` value would
       # shadow anything a step writes to $GITHUB_ENV. The "Install Cosy" step sets
       # it to `release` or `staging` depending on whether a tag override was given.
+      #
+      # Public host serving the uploaded Playwright reports. Job-level on purpose:
+      # the SUITE step bakes the URL into results/summary.json (that is where
+      # `reportUrl` is computed) and the upload step logs it, and no step writes
+      # this name to $GITHUB_ENV, so there is nothing for a job-level value to
+      # shadow. Setting it on the push step alone would silently do nothing.
+      REPORTS_BASE_URL: ${{ vars.REPORTS_BASE_URL || 'https://systemtest-reports.jannekeipert.de' }}
 
     steps:
       - name: Log trigger reason
@@ -322,6 +329,95 @@ jobs:
               '.features += [{"feature":"uninstall","status":$s,"durationSeconds":$d}]' \
               results/summary.json > "$tmp" && mv "$tmp" results/summary.json
           fi
+
+      # Publish the Playwright HTML report so a red row in SigNoz is one click from
+      # the video and the trace of what actually happened, instead of a zip download
+      # that expires in 14 days.
+      #
+      # The report directory is self-contained — `index.html`, the attachments under
+      # `data/` (videos .webm, traces .zip, screenshots) and a bundled copy of the
+      # trace viewer under `trace/`, all referenced relatively — so serving the
+      # directory is enough; nothing has to be rewritten. Verified against a MinIO of
+      # the deployed release: the report renders, videos play and the trace viewer
+      # unpacks the trace, all from the hosted URL.
+      #
+      # WHERE: s3://cosy-systemtest-reports/<channel>/<run-id>/, served read-only at
+      # ${REPORTS_BASE_URL}/<channel>/<run-id>/index.html. `run-systemtest.ts` derives
+      # exactly that URL for `summary.json` → the `cosy.systemtest.report_url` resource
+      # attribute, so keep the layout and the derivation in sync (buildReportUrl).
+      #
+      # BEFORE the SigNoz push, so the link is live by the time the metric carrying it
+      # lands. `results/` — including the stack diagnostics, container logs and dmesg —
+      # is deliberately NOT published here; it stays a private GitHub artifact. Only
+      # the report, which shows a throwaway instance's UI, is public.
+      #
+      # NEVER FAILS THE JOB. Hosting is a convenience on top of the artifacts, which
+      # are still uploaded below; turning a green product run red because an object
+      # store was briefly unreachable would train everyone to ignore the colour. It is
+      # loud instead — `::warning::` plus the reason — and the missing report is
+      # self-evident from the 404 the dashboard link then gives. (Contrast the SigNoz
+      # push, which DOES fail the job: that path is the signal itself, not a copy.)
+      - name: Publish Playwright report
+        if: always()
+        env:
+          MINIO_ENDPOINT: ${{ vars.MINIO_REPORTS_ENDPOINT || 'https://minio-cli.jannekeipert.de' }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_REPORTS_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_REPORTS_SECRET_KEY }}
+          # Pinned to the mc release the cluster's MinIO chart uses. The published
+          # .sha256sum is verified — an unpinned installer script fetching an
+          # unverified binary is not something a credential should be handed to.
+          MC_VERSION: RELEASE.2024-11-21T17-21-54Z
+        run: |
+          set -uo pipefail
+
+          if [ ! -d playwright-report ]; then
+            echo "::warning::No playwright-report/ directory — nothing to publish. \
+          The suite step must have died before Playwright wrote its HTML report."
+            exit 0
+          fi
+          # Forks get no secrets; behave like the OTLP push and skip with an INFO line.
+          if [ -z "${MINIO_ACCESS_KEY}" ] || [ -z "${MINIO_SECRET_KEY}" ]; then
+            echo "INFO: MINIO_REPORTS_ACCESS_KEY / MINIO_REPORTS_SECRET_KEY are not set — \
+          skipping report publication. Expected on forks; the artifacts below still carry \
+          the full report."
+            exit 0
+          fi
+
+          channel="${COSY_CHANNEL:-release}"
+          target="${REPORTS_BASE_URL}/${channel}/${GITHUB_RUN_ID}/index.html"
+
+          fail() {
+            echo "::warning::Could not publish the Playwright report ($1). The report is \
+          still attached to this run as the systemtest-report artifact; the dashboard's \
+          report link (${target}) will 404 for this run."
+            exit 0
+          }
+
+          base="https://dl.min.io/client/mc/release/linux-amd64/archive/mc.${MC_VERSION}"
+          curl -fsSL --retry 3 --retry-delay 5 -o "mc.${MC_VERSION}" "${base}" || fail "mc download failed"
+          curl -fsSL --retry 3 --retry-delay 5 -o "mc.${MC_VERSION}.sha256sum" "${base}.sha256sum" \
+            || fail "mc checksum download failed"
+          sha256sum -c "mc.${MC_VERSION}.sha256sum" || fail "mc checksum MISMATCH — refusing to run it"
+          mv "mc.${MC_VERSION}" mc && chmod +x mc
+
+          # Credentials arrive through the environment; `mc alias set` reads them from
+          # there, so they never appear in a command line (visible in `ps`) or in the log.
+          MC="./mc --config-dir ${RUNNER_TEMP}/mc"
+          $MC alias set reports "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}" \
+            >/dev/null || fail "could not authenticate against ${MINIO_ENDPOINT}"
+
+          dest="reports/cosy-systemtest-reports/${channel}/${GITHUB_RUN_ID}"
+          # `--overwrite` so a re-run of the same GitHub run replaces its own report
+          # rather than half-updating it; `--retry` for transient upload failures.
+          for attempt in 1 2 3; do
+            if $MC mirror --overwrite --retry --quiet playwright-report "${dest}"; then
+              echo "Published report: ${target}"
+              exit 0
+            fi
+            echo "Report upload attempt ${attempt}/3 failed; retrying in 10s."
+            sleep 10
+          done
+          fail "3 upload attempts to ${dest} failed"
 
       # Push LAST, so the payload contains the complete matrix — every spec row plus
       # the `uninstall` row the teardown assertion just appended. Reads the summary the

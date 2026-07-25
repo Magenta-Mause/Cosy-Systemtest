@@ -59,6 +59,12 @@ const OTLP_METRICS_PATH = '/v1/metrics';
 const OTLP_TRACES_PATH = '/v1/traces';
 /** Base UI URL used to print a clickable deep link to the run's trace. */
 const SIGNOZ_UI_URL = 'https://signoz.jannekeipert.de';
+/**
+ * Host serving the uploaded Playwright HTML reports (MinIO bucket
+ * `cosy-systemtest-reports`, see the cluster-deployment repo). Overridable with
+ * the `REPORTS_BASE_URL` env var / repo variable, exactly like `OTEL_INGEST_URL`.
+ */
+const DEFAULT_REPORTS_BASE_URL = 'https://systemtest-reports.jannekeipert.de';
 const PUSH_TIMEOUT_MS = 15_000;
 const PUSH_ATTEMPTS = 3;
 const PUSH_RETRY_DELAY_MS = 3_000;
@@ -117,6 +123,11 @@ interface Summary {
   versions: Versions;
   generatedAt: string;
   runUrl: string | null;
+  /**
+   * Public URL of this run's hosted Playwright HTML report (videos and traces
+   * included). Derived, not observed — see `buildReportUrl`.
+   */
+  reportUrl: string | null;
   features: FeatureResult[];
 }
 
@@ -262,15 +273,17 @@ function optionalEnv(name: string): string | null {
 }
 
 function writeSummary(features: FeatureResult[]): Summary {
+  // `staging` when the workflow pinned an image tag, `release` otherwise.
+  const channel = optionalEnv('COSY_CHANNEL') ?? 'release';
   const summary: Summary = {
-    // `staging` when the workflow pinned an image tag, `release` otherwise.
-    channel: optionalEnv('COSY_CHANNEL') ?? 'release',
+    channel,
     versions: {
       backend: optionalEnv('COSY_BACKEND_TAG'),
       frontend: optionalEnv('COSY_FRONTEND_TAG'),
     },
     generatedAt: new Date().toISOString(),
     runUrl: buildRunUrl(),
+    reportUrl: buildReportUrl(channel),
     features,
   };
   fs.writeFileSync(SUMMARY, `${JSON.stringify(summary, null, 2)}\n`);
@@ -363,6 +376,7 @@ function readSummary(): Summary {
     },
     generatedAt,
     runUrl: optionalString(root, 'runUrl', 'summary'),
+    reportUrl: optionalString(root, 'reportUrl', 'summary'),
     features: root.features.map(parseFeature),
   };
 }
@@ -493,6 +507,10 @@ function resourceAttributes(summary: Summary, traceId: string): OtlpAttribute[] 
   ];
   // Absent outside GitHub Actions — omit rather than invent a placeholder link.
   if (summary.runUrl) attributes.push(attribute('cosy.systemtest.run_url', summary.runUrl));
+  // One click from a red cell to the video of what happened. Same cardinality
+  // profile as the run URL (one new value per run), and the dashboard's run table
+  // shows it as its own column.
+  if (summary.reportUrl) attributes.push(attribute('cosy.systemtest.report_url', summary.reportUrl));
   return attributes;
 }
 
@@ -940,6 +958,7 @@ export async function pushTelemetry(summary: Summary): Promise<PushOutcome> {
 
   console.log(`\nTrace id for this run: ${traceId}`);
   console.log(`Trace in SigNoz: ${SIGNOZ_UI_URL}/trace/${traceId}`);
+  if (summary.reportUrl) console.log(`Playwright report: ${summary.reportUrl}`);
 
   const failures: string[] = [];
   for (const signal of signals) {
@@ -1100,6 +1119,35 @@ function buildRunUrl(): string | null {
     return `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`;
   }
   return null;
+}
+
+/**
+ * Where this run's Playwright HTML report is served: one immutable prefix per
+ * channel and GitHub run id in the `cosy-systemtest-reports` MinIO bucket.
+ *
+ *   https://systemtest-reports.jannekeipert.de/<channel>/<run-id>/index.html
+ *
+ * DERIVED, not observed. The workflow uploads the report in a separate step, and
+ * this URL is computed from values we already have — so the link is identical
+ * whichever step computes it, and the same run id already inside
+ * `cosy.systemtest.run_url` reproduces it by hand. The cost of deriving is that a
+ * failed upload leaves a 404 behind (the upload step warns loudly when that
+ * happens); the alternative, threading a value between two workflow steps, would
+ * silently drop the link whenever the ordering changed.
+ *
+ * `/index.html` is part of the URL on purpose: MinIO serves objects, not
+ * directories, so the bare prefix has nothing to return.
+ *
+ * A re-run of the same GitHub run overwrites the prefix rather than adding an
+ * `attempt-N` segment — `run_url` has no attempt component either, so an
+ * attempt-scoped path could not be derived from what the metrics carry, and both
+ * signals then agree on describing the latest attempt.
+ */
+function buildReportUrl(channel: string): string | null {
+  const runId = optionalEnv('GITHUB_RUN_ID');
+  if (!runId) return null; // Not on GitHub Actions — nothing is uploaded either.
+  const base = (optionalEnv('REPORTS_BASE_URL') ?? DEFAULT_REPORTS_BASE_URL).replace(/\/+$/, '');
+  return `${base}/${channel}/${runId}/index.html`;
 }
 
 function round1(n: number): number {

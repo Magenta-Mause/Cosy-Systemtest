@@ -123,7 +123,13 @@ listable and typecheckable on any machine.
 | `OTEL_INGEST_URL` | Base URL of the OTLP-HTTP ingest; the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics` and `${OTEL_INGEST_URL}/v1/traces` | — (push skipped) |
 | `OTEL_INGEST_USER` | HTTP Basic user for the ingest | — (push skipped) |
 | `OTEL_INGEST_PASSWORD` | HTTP Basic password for the ingest | — (push skipped) |
+| `REPORTS_BASE_URL` | Host serving the [hosted HTML reports](#hosted-html-reports); the runner derives `summary.json` → `reportUrl` from it | `https://systemtest-reports.jannekeipert.de` |
 | `CI` | Enables CI reporters (github/html/json) + retries | — |
+
+CI-only, read by the workflow's publish step rather than by the runner:
+`MINIO_REPORTS_ENDPOINT` (repo variable, default `https://minio-cli.jannekeipert.de`)
+plus the `MINIO_REPORTS_ACCESS_KEY` / `MINIO_REPORTS_SECRET_KEY` repo secrets. Without
+the two secrets the step logs one INFO line and skips — forks are unaffected.
 
 ## How it runs in CI
 
@@ -131,7 +137,8 @@ listable and typecheckable on any machine.
 checkout → Node 22 → `npm ci` → `playwright install --with-deps chromium` → install
 Cosy → poll health (≤10 min) → run the suite (`--no-push`, writes
 `results/summary.json`) → capture diagnostics → uninstall + assert clean teardown
-(appends the `uninstall` row) → **push metrics + the run's trace to SigNoz**
+(appends the `uninstall` row) → **publish the HTML report**
+([below](#hosted-html-reports)) → **push metrics + the run's trace to SigNoz**
 (`--push-only`) → upload the report and results. The runner exits 0 even when features
 fail (metrics are truth); the job only goes red on infrastructure errors — including a
 failed push (see [Reporting](#reporting-what-lands-in-signoz)). The ingest URL comes from
@@ -207,10 +214,10 @@ platform**. Keep the prefix on every metric added here — do not shorten it bac
 
 Resource attributes on every data point — and on every span of the run's trace:
 `service.name=cosy-systemtest`, `deployment.environment=<channel>`,
-`cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_url` and
-`cosy.systemtest.trace_id` — so any point names the build it tested, links back to the
-GitHub run (and from there to the HTML report, Playwright traces and videos), and
-names the SigNoz trace of the same run.
+`cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_url`,
+`cosy.systemtest.report_url` and `cosy.systemtest.trace_id` — so any point names the
+build it tested, links back to the GitHub run, opens the run's hosted HTML report
+(videos and traces included), and names the SigNoz trace of the same run.
 
 **How a skip is represented, and why.** A skipped feature is *untested*, which is
 neither a pass nor a failure. Reporting it as `1` would claim a feature works when
@@ -281,6 +288,62 @@ job. A reporting path that breaks silently
 would leave the dashboard stale with nobody noticing, which is the failure mode this
 reporting exists to prevent. The summary is written by an earlier step, so the results
 artifact survives a failed push intact.
+
+### Hosted HTML reports
+
+A red cell on the dashboard should be one click from *watching what happened*, not a
+zip download that expires. Every run's Playwright HTML report — the failure messages,
+the screenshots, a `.webm` video of each test and its full trace — is therefore
+uploaded to an object store and served at a stable URL:
+
+```
+https://systemtest-reports.jannekeipert.de/<channel>/<github-run-id>/index.html
+```
+
+`<channel>` is `release` or `staging` (the same value the metrics carry as `channel` /
+`deployment.environment`); `<github-run-id>` is the id already inside
+`cosy.systemtest.run_url`, so the two links reproduce one another by hand. The runner
+puts the full URL in `results/summary.json` (`reportUrl`) and pushes it as the
+`cosy.systemtest.report_url` resource attribute, which the dashboard's **"Runs in
+window"** table shows as a column and offers as the **"Watch this run's report"**
+context link.
+
+The URL is **derived**, not reported back from the upload: `buildReportUrl()` composes
+it from `REPORTS_BASE_URL`, the channel and `GITHUB_RUN_ID`. That keeps the link
+identical no matter which step computes it, at the cost that a failed upload leaves a
+404 behind — which the publish step warns about loudly. `/index.html` is part of the
+URL because the store serves objects, not directories. A **re-run** of the same GitHub
+run overwrites its own prefix rather than adding an `attempt-N` segment: `run_url` has
+no attempt component either, so an attempt-scoped path could not be derived from what
+the metrics carry, and both signals then agree on describing the latest attempt.
+
+**Retention: 30 days**, enforced by a bucket lifecycle rule on the server (not by CI,
+which holds no delete permission). That is more than double the 14-day GitHub artifact
+retention it supersedes and long enough to compare a regression against a month of
+green nights. Rows older than 30 days on the dashboard link to a report that 404s —
+expected, not a fault.
+
+**Access: public read.** A report shows the UI of a *throwaway* Cosy instance — a
+container on a GitHub-hosted runner at `localhost:8080` that the same job's uninstall
+step destroys — and the product itself is open source, so nothing in it is both secret
+and durable. Worth knowing: Playwright traces record what tests typed, which includes
+that instance's generated admin password; it authenticates against a machine that no
+longer exists, and it is the reason to revisit this decision the moment a spec ever
+exercises a *real* external credential. Anonymous access is read-only and confined to
+this one bucket. The stack diagnostics (container logs, `dmesg`, `docker stats`) are
+deliberately **not** published — they stay a private GitHub artifact.
+
+**The upload never fails the job.** Hosting is a convenience layered on top of the
+artifacts, which are still uploaded; a briefly unreachable object store must not turn a
+green product run red and train everyone to ignore the colour. The step retries, then
+emits a `::warning::` naming the reason and the URL that will 404. (Contrast the OTLP
+push, which *does* fail the job — that path is the signal itself, not a copy.)
+
+The bucket, its lifecycle rule, the write-only credential and the ingress live in the
+cluster GitOps repo (`Janne6565/cluster-deployment`, `infrastructure/minio.yaml` and
+`infrastructure/cosy-systemtest-reports-ingress.yaml`). CI authenticates with a MinIO
+key scoped to `PutObject` on that single bucket: it cannot read objects back, cannot
+delete, and cannot see any other bucket.
 
 ## The SigNoz dashboard
 

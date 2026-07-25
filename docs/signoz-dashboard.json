@@ -1978,8 +1978,8 @@
     },
     {
       "id": "t-runs",
-      "title": "Runs in window \u2014 image tags, GitHub run link & trace",
-      "description": "One row per run in the dashboard's time range, carrying the resource attributes every data point is tagged with. A red cell in the matrix above is attributable to the backend/frontend image tag here; the run URL leads to the Playwright HTML report, traces and videos, and cosy.systemtest.trace_id identifies the OTLP trace the same run emitted \u2014 the per-feature timeline (what ran when, how long, which failed and why).\n\nDRILL-DOWN: click a row and choose \"Open this run's trace\" to jump to /trace/<id> in SigNoz. The id is also shown as a column, so it can be pasted into the Traces explorer's trace-id search if the context menu is unavailable.\n\n(Builder query rather than PromQL: the attribute keys contain dots, which PromQL label names cannot express.)",
+      "title": "Runs in window \u2014 image tags, report, GitHub run & trace",
+      "description": "One row per run in the dashboard's time range, carrying the resource attributes every data point is tagged with. A red cell in the matrix above is attributable to the backend/frontend image tag here; cosy.systemtest.report_url opens that run's Playwright HTML report \u2014 the videos and traces of what the browser actually did; the run URL leads to the GitHub Actions run (job log, diagnostics artifact); and cosy.systemtest.trace_id identifies the OTLP trace the same run emitted \u2014 the per-feature timeline (what ran when, how long, which failed and why).\n\nDRILL-DOWN: click a row and choose \"Watch this run's report\" to open the hosted report, or \"Open this run's trace\" to jump to /trace/<id> in SigNoz. Both values are also shown as columns, so they can be copied if the context menu is unavailable.\n\nThe report URL is derived from the channel and the GitHub run id (<host>/<channel>/<run-id>/index.html), so it stays guessable from the run URL next to it. Reports expire after 30 days, so rows older than that show a link that 404s \u2014 expected, not a fault.\n\n(Builder query rather than PromQL: the attribute keys contain dots, which PromQL label names cannot express.)",
       "panelTypes": "table",
       "query": {
         "id": "t-runs-q",
@@ -2024,6 +2024,11 @@
                 },
                 {
                   "dataType": "string",
+                  "key": "cosy.systemtest.report_url",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
                   "key": "cosy.systemtest.run_url",
                   "type": "tag"
                 },
@@ -2060,6 +2065,11 @@
       "timePreferance": "GLOBAL_TIME",
       "contextLinks": {
         "linksData": [
+          {
+            "id": "open-run-report",
+            "label": "Watch this run's report",
+            "url": "{{_cosy.systemtest.report_url}}"
+          },
           {
             "id": "open-run-trace",
             "label": "Open this run's trace",
