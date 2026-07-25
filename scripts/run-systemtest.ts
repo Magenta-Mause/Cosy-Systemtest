@@ -5,13 +5,26 @@
  * (spec file), writes `results/summary.json`, prints a table, and pushes the
  * per-feature results to SigNoz as OTLP-HTTP metrics.
  *
+ * Three modes, because writing the summary and pushing it happen at different
+ * points in the CI job:
+ *   - (no flag)     run the suite, write the summary, push. Local default.
+ *   - `--no-push`   run the suite and write the summary only.
+ *   - `--push-only` push an existing `results/summary.json`; no Playwright.
+ *
+ * Why the split: `uninstall` is asserted by the workflow AFTER the suite step and
+ * appended to `results/summary.json` as an extra feature row. Pushing from inside
+ * the suite step therefore reported 19 of 20 features — a dashboard that silently
+ * misrepresented the matrix. CI now runs `--no-push` for the suite and
+ * `--push-only` in a later `if: always()` step, once that row exists.
+ *
  * Semantics: "metrics are truth, exit 0". Test failures do NOT fail this process
  * — the per-feature results are the signal, and the dashboard/alerts decide what
  * is broken. The process exits non-zero ONLY on an infrastructure error:
  *   - Playwright could not produce a parseable report at all, or
+ *   - `--push-only` found no usable `results/summary.json` to push, or
  *   - the metric push failed. A broken reporting path must not hide behind a
  *     green job; nobody notices a dashboard that silently stopped updating.
- * `results/summary.json` is written (and uploaded as an artifact) before the push
+ * `results/summary.json` is written (and uploaded as an artifact) before any push
  * is attempted, so a failed push never costs us the results.
  *
  * The push is SKIPPED with an INFO log — and exit 0 — unless all three of
@@ -173,6 +186,74 @@ function writeSummary(features: FeatureResult[]): Summary {
   };
   fs.writeFileSync(SUMMARY, `${JSON.stringify(summary, null, 2)}\n`);
   return summary;
+}
+
+const FEATURE_STATUSES: readonly string[] = ['passed', 'failed', 'skipped'];
+
+function asRecord(value: unknown, what: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${what} is not a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireString(record: Record<string, unknown>, key: string, what: string): string {
+  const value = record[key];
+  if (typeof value !== 'string' || !value) throw new Error(`${what}.${key} is missing or empty`);
+  return value;
+}
+
+/** A missing/`null` optional string stays `null`; anything else is a malformed file. */
+function optionalString(record: Record<string, unknown>, key: string, what: string): string | null {
+  const value = record[key];
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new Error(`${what}.${key} is not a string`);
+  return value;
+}
+
+function parseFeature(value: unknown, index: number): FeatureResult {
+  const what = `features[${index}]`;
+  const record = asRecord(value, what);
+  const status = requireString(record, 'status', what);
+  if (!FEATURE_STATUSES.includes(status)) {
+    throw new Error(`${what}.status is "${status}", expected one of ${FEATURE_STATUSES.join('/')}`);
+  }
+  const durationSeconds = record.durationSeconds;
+  if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds)) {
+    throw new Error(`${what}.durationSeconds is missing or not a finite number`);
+  }
+  return {
+    feature: requireString(record, 'feature', what),
+    status: status as FeatureStatus,
+    durationSeconds,
+  };
+}
+
+/**
+ * Read and validate an existing `results/summary.json` (the only input `--push-only`
+ * has). Validated rather than trusted because the workflow edits the file with `jq`
+ * after the runner wrote it: a bad row must fail here, loudly, instead of turning
+ * into a payload the collector rejects — silently, from the job's point of view.
+ */
+function readSummary(): Summary {
+  const root = asRecord(JSON.parse(fs.readFileSync(SUMMARY, 'utf-8')), 'summary');
+  const generatedAt = requireString(root, 'generatedAt', 'summary');
+  if (Number.isNaN(Date.parse(generatedAt))) {
+    throw new Error(`summary.generatedAt is not a parseable timestamp: "${generatedAt}"`);
+  }
+  if (!Array.isArray(root.features)) throw new Error('summary.features is missing or not an array');
+  const versions = root.versions === undefined ? {} : asRecord(root.versions, 'summary.versions');
+
+  return {
+    channel: requireString(root, 'channel', 'summary'),
+    versions: {
+      backend: optionalString(versions, 'backend', 'summary.versions'),
+      frontend: optionalString(versions, 'frontend', 'summary.versions'),
+    },
+    generatedAt,
+    runUrl: optionalString(root, 'runUrl', 'summary'),
+    features: root.features.map(parseFeature),
+  };
 }
 
 function printTable(summary: Summary): void {
@@ -470,7 +551,33 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function main(): Promise<void> {
+const USAGE = 'usage: run-systemtest.ts [--no-push | --push-only]';
+
+interface Options {
+  /** Run Playwright and write the summary (false only for `--push-only`). */
+  runTests: boolean;
+  /** Attempt the OTLP push (false only for `--no-push`). */
+  push: boolean;
+}
+
+function parseOptions(argv: string[]): Options {
+  const flags = argv.slice(2);
+  const unknown = flags.filter((flag) => flag !== '--no-push' && flag !== '--push-only');
+  if (unknown.length > 0) {
+    console.error(`Unknown argument(s): ${unknown.join(', ')}\n${USAGE}`);
+    process.exit(2);
+  }
+  const pushOnly = flags.includes('--push-only');
+  const noPush = flags.includes('--no-push');
+  if (pushOnly && noPush) {
+    console.error(`--push-only and --no-push are mutually exclusive.\n${USAGE}`);
+    process.exit(2);
+  }
+  return { runTests: !pushOnly, push: !noPush };
+}
+
+/** Run the suite and write `results/summary.json` — the artifact-bearing half. */
+function runSuiteAndWriteSummary(): Summary {
   const pwExit = runPlaywright();
 
   if (!fs.existsSync(JSON_REPORT)) {
@@ -492,11 +599,61 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Written BEFORE the push, so a broken reporting path never costs us the
-  // results — the summary is uploaded as an artifact either way.
+  // Written unconditionally — red features are a normal outcome, and the summary
+  // is what the artifact and the later push step both read.
   const summary = writeSummary(features);
   printTable(summary);
   console.log(`\nWrote ${path.relative(process.cwd(), SUMMARY)}.`);
+  return summary;
+}
+
+/**
+ * `--push-only`: the summary another step already wrote is the whole input.
+ *
+ * A missing or unusable file is an infrastructure error, not a quiet no-op: this
+ * step exists so the run reaches the dashboard, and a run that reports nothing must
+ * not look healthy. (It is reached with `if: always()`, so it also fires when the
+ * suite step died before writing anything — that job is already red, and this makes
+ * the reporting gap explicit rather than adding a second silent failure.)
+ */
+function loadSummaryForPush(): Summary {
+  const relative = path.relative(process.cwd(), SUMMARY);
+  if (!fs.existsSync(SUMMARY)) {
+    console.error(
+      `::error::--push-only: ${relative} does not exist, so this run reports NOTHING to ` +
+        `SigNoz. The suite step must have failed before writing it — check the earlier steps.`,
+    );
+    process.exit(1);
+  }
+  try {
+    const summary = readSummary();
+    console.log(
+      `Read ${relative}: ${summary.features.length} features, channel ${summary.channel}, ` +
+        `generated ${summary.generatedAt}.`,
+    );
+    return summary;
+  } catch (err) {
+    console.error(
+      `::error::--push-only: ${relative} is not a usable summary — ` +
+        `${err instanceof Error ? err.message : err}. Refusing to push a payload the ` +
+        `collector would reject.`,
+    );
+    process.exit(1);
+  }
+}
+
+async function main(): Promise<void> {
+  const options = parseOptions(process.argv);
+  const summary = options.runTests ? runSuiteAndWriteSummary() : loadSummaryForPush();
+
+  if (!options.push) {
+    console.log(
+      '\nINFO: --no-push — results written, metrics NOT pushed. In CI the push runs in a ' +
+        'later step, after the workflow appended the `uninstall` row; see ' +
+        '.github/workflows/systemtest.yml.',
+    );
+    process.exit(0);
+  }
 
   try {
     await pushMetrics(summary);
@@ -514,8 +671,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Metrics-are-truth: never fail the process on red tests.
-  console.log('Exiting 0 regardless of test outcomes (metrics are truth).');
+  // Metrics-are-truth: never fail the process on red features.
+  console.log('Exiting 0 regardless of feature outcomes (metrics are truth).');
   process.exit(0);
 }
 

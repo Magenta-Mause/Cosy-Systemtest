@@ -13,6 +13,8 @@
     "test:extended": "playwright test --grep @extended",
     "typecheck": "tsc --noEmit",
     "systemtest": "tsx scripts/run-systemtest.ts",
+    "systemtest:nopush": "tsx scripts/run-systemtest.ts --no-push",
+    "systemtest:push": "tsx scripts/run-systemtest.ts --push-only",
     "report": "playwright show-report"
   },
   "repository": {

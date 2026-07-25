@@ -12,7 +12,9 @@ npm install          # Node >= 22
 npm test             # whole suite (chromium)
 npm run test:core    # @core specs (grep tag)
 npm run typecheck    # tsc --noEmit
-npm run systemtest   # runner → results/summary.json (exits 0 even on red tests)
+npm run systemtest   # runner → results/summary.json + push (exits 0 even on red tests)
+npm run systemtest:nopush  # same, but write only — no OTLP push (what CI's suite step runs)
+npm run systemtest:push    # push an existing results/summary.json; runs no tests
 npm run report       # open last HTML report
 npx playwright test --list   # lists all specs even with no install present
 ```
@@ -63,9 +65,13 @@ unaffected. When they *are* set, a failed push exits **1** (see convention 8).
    body so they stay listable without an install and skip with one uniform reason.
 8. **Runner semantics:** `scripts/run-systemtest.ts` exits 0 even when features fail
    (metrics are truth); it fails only on infrastructure errors — no parseable report,
-   or a **failed OTLP push**. A push that breaks quietly would leave the dashboard
-   stale with nobody noticing, so it is loud and red. `results/summary.json` is always
-   written *before* the push, so a failed push never costs us the results.
+   a `--push-only` run with no usable `results/summary.json`, or a **failed OTLP
+   push**. A push that breaks quietly would leave the dashboard stale with nobody
+   noticing, so it is loud and red. `results/summary.json` is always written *before*
+   any push, so a failed push never costs us the results.
+   **Writing and pushing are separate modes:** `--no-push` (run + write only) and
+   `--push-only` (push an existing summary, no Playwright); no flag = both, the local
+   default. CI runs them as two steps — see convention 10.
 9. **Never report a skip as a pass.** A skipped feature is omitted from
    `cosy_systemtest_feature_status` and `cosy_systemtest_feature_duration_seconds`
    (a `0` duration would read as "it got faster") and flagged by
@@ -75,9 +81,14 @@ unaffected. When they *are* set, a failed push exits **1** (see convention 8).
    the skipped gauge. If you add a metric, keep this rule: absence of evidence is
    never reported as evidence of health.
 10. **Install/uninstall belong to the workflow**, not to Playwright. `uninstall` is a
-    workflow-appended row in `results/summary.json`, not a spec. It is appended
-    *after* the runner pushed, so it reaches the artifact but **not** SigNoz —
-    keep that in mind before treating the dashboard as the whole matrix.
+    workflow-appended row in `results/summary.json`, not a spec. **The push therefore
+    comes last:** the suite step runs `--no-push`, the teardown assertion appends the
+    `uninstall` row, and a separate `if: always()` step then runs `--push-only`, so
+    SigNoz and the artifact show the same matrix. Never move the push back into the
+    suite step — that reported 19 of 20 features and made the dashboard lie. The
+    accepted cost: a job cancelled by `timeout-minutes` reports nothing at all (it
+    loses the artifact too), which is visible as staleness in
+    `cosy_systemtest_last_run_timestamp_seconds`.
 11. **A result must be attributable to a build.** The workflow's `backend_tag` /
     `frontend_tag` / `config_ref` dispatch inputs are forwarded to `install_cosy.sh`
     only when non-empty; the effective tags are then read back from the installed

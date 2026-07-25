@@ -83,7 +83,9 @@ npm test                    # run the whole suite (chromium)
 npm run test:core           # run @core-tagged specs (install → lifecycle → uninstall)
 npm run test:extended       # run @extended-tagged specs (the rest of the matrix)
 npm run typecheck           # tsc --noEmit
-npm run systemtest          # run the suite via the runner → results/summary.json
+npm run systemtest          # run the suite via the runner → results/summary.json, then push
+npm run systemtest:nopush   # run + write results/summary.json only (what CI's suite step does)
+npm run systemtest:push     # push an existing results/summary.json — runs no tests
 npm run report              # open the last HTML report
 ```
 
@@ -126,14 +128,28 @@ listable and typecheckable on any machine.
 
 `.github/workflows/systemtest.yml` (nightly `30 2 * * *` + `workflow_dispatch`):
 checkout → Node 22 → `npm ci` → `playwright install --with-deps chromium` → install
-Cosy → poll health (≤10 min) → run the suite → push metrics to SigNoz → uninstall +
-assert clean teardown → upload the report and results. The runner exits 0 even when
-features fail (metrics are truth); the job only goes red on infrastructure errors —
-including a failed metric push (see [Reporting](#reporting-what-lands-in-signoz)).
-The ingest URL comes from the `OTEL_INGEST_URL` repo variable (defaulting to
+Cosy → poll health (≤10 min) → run the suite (`--no-push`, writes
+`results/summary.json`) → capture diagnostics → uninstall + assert clean teardown
+(appends the `uninstall` row) → **push metrics to SigNoz** (`--push-only`) → upload
+the report and results. The runner exits 0 even when features fail (metrics are
+truth); the job only goes red on infrastructure errors — including a failed metric
+push (see [Reporting](#reporting-what-lands-in-signoz)). The ingest URL comes from
+the `OTEL_INGEST_URL` repo variable (defaulting to
 `https://otel-ingest.jannekeipert.de`) and the credentials from the
-`OTEL_INGEST_USER` / `OTEL_INGEST_PASSWORD` repo secrets, passed to the step via
+`OTEL_INGEST_USER` / `OTEL_INGEST_PASSWORD` repo secrets, passed to the push step via
 `env:` — never interpolated into a shell command.
+
+**Why the push is a separate, final step.** `uninstall` is asserted by the workflow
+*after* the suite and appended to `results/summary.json`. When the suite step also
+pushed, that row was written too late to be included and SigNoz saw 19 of the 20
+features while the artifact had all 20 — a dashboard that quietly misrepresented the
+matrix. Writing and pushing are now separate modes of the same runner, and the push
+runs last with `if: always()`. The accepted cost: if the whole job hits its
+`timeout-minutes`, GitHub cancels the remaining steps and that run reports nothing
+(it loses the results artifact for the same reason) — visible as a stale
+`cosy_systemtest_last_run_timestamp_seconds`. That is preferable to pushing twice per
+run just to cover it, which would put a second, `uninstall`-less matrix on the
+dashboard every night.
 
 ### Testing a specific, not-yet-released build
 
@@ -156,9 +172,10 @@ result says which build it tested.
 
 ## Reporting: what lands in SigNoz
 
-After the suite, the runner POSTs the results to the authenticated OTLP-HTTP ingest
-(`${OTEL_INGEST_URL}/v1/metrics`, HTTP Basic) which fronts the SigNoz collector. All
-five metrics are gauges, written once per run:
+Once the suite has run *and* the workflow has asserted the teardown, the runner POSTs
+the complete results — every spec row plus the workflow's `uninstall` row — to the
+authenticated OTLP-HTTP ingest (`${OTEL_INGEST_URL}/v1/metrics`, HTTP Basic) which
+fronts the SigNoz collector. All five metrics are gauges, written once per run:
 
 | Metric | Attributes | Meaning |
 |---|---|---|
@@ -184,8 +201,8 @@ reports `feature_skipped`, so a feature that quietly stops running is visible as
 `1` instead of vanishing from the dashboard. Consequently `run_success` means only
 "nothing failed": read it together with `feature_skipped`, never alone.
 
-`uninstall` is the one row that is asserted by the workflow *after* the push, so it
-appears in `results/summary.json` but not in SigNoz.
+`uninstall` is the one row asserted by the workflow rather than by a spec; the push
+step runs after that assertion, so it is reported exactly like every other feature.
 
 **Dry-run behaviour (local runs and forks).** The push happens only when
 `OTEL_INGEST_URL`, `OTEL_INGEST_USER` and `OTEL_INGEST_PASSWORD` are all set and
@@ -194,11 +211,12 @@ as the complete result, and exits 0 — so `npm run systemtest` on a laptop or i
 fork (where secrets are not exposed) behaves exactly as it did before.
 
 **A failed push fails the job.** Red features never fail the runner, but a push that
-fails — bad credentials, ingest down, or a `200` whose body reports rejected data
-points — exits non-zero with a `::error::` annotation, after three attempts. A
-reporting path that breaks silently would leave the dashboard stale with nobody
-noticing, which is the failure mode this reporting exists to prevent. The summary is
-written before the push, so the results artifact survives a failed push intact.
+fails — bad credentials, ingest down, a `200` whose body reports rejected data points,
+or a `results/summary.json` that is missing or malformed — exits non-zero with a
+`::error::` annotation, after three attempts. A reporting path that breaks silently
+would leave the dashboard stale with nobody noticing, which is the failure mode this
+reporting exists to prevent. The summary is written by an earlier step, so the results
+artifact survives a failed push intact.
 
 ## Documentation
 

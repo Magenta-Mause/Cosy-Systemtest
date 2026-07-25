@@ -199,20 +199,15 @@ jobs:
           exit 1
 
       # Metrics-are-truth: this step exits 0 even when features fail. It fails only
-      # on an infrastructure error — Playwright produced no parseable report, or the
-      # OTLP push failed. A failed push is deliberately loud: a reporting path that
-      # breaks quietly means the SigNoz dashboard goes stale and nobody notices.
+      # on an infrastructure error — Playwright produced no parseable report.
       #
-      # Secrets are passed through `env:` and never interpolated into the shell
-      # command. `OTEL_INGEST_URL` falls back to the known ingress host when the repo
-      # variable is unset; if any of the three is missing (e.g. on a fork, where
-      # secrets are not exposed) the runner skips the push and still exits 0.
+      # `--no-push`: this step only WRITES results/summary.json. The push happens in
+      # the "Push results to SigNoz" step below, after the teardown assertion appended
+      # the `uninstall` row — otherwise the dashboard would see 19 of 20 features. The
+      # summary is written whether features pass or fail, so that later step always
+      # has something to push. No ingest credentials are needed here.
       - name: Run systemtest suite
-        env:
-          OTEL_INGEST_URL: ${{ vars.OTEL_INGEST_URL || 'https://otel-ingest.jannekeipert.de' }}
-          OTEL_INGEST_USER: ${{ secrets.OTEL_INGEST_USER }}
-          OTEL_INGEST_PASSWORD: ${{ secrets.OTEL_INGEST_PASSWORD }}
-        run: npx tsx scripts/run-systemtest.ts
+        run: npx tsx scripts/run-systemtest.ts --no-push
 
       # Stack diagnostics BEFORE uninstall (which destroys the evidence). Several
       # specs have failed in ways that point at the STACK degrading mid-run rather
@@ -280,12 +275,8 @@ jobs:
         run: sudo bash uninstall_cosy.sh docker -y
 
       # Teardown is itself a tested feature: assert nothing is left behind and append
-      # an `uninstall` row to the summary the runner wrote.
-      #
-      # NOTE: this row is appended AFTER the runner already pushed its metrics, so
-      # `uninstall` appears in the results artifact but NOT in SigNoz. Reporting it
-      # too needs a second, push-only invocation here (deliberately not added: the
-      # push must stay inside the suite step so a hard-timeout still reports).
+      # an `uninstall` row to the summary the runner wrote. The push step below runs
+      # after this one, so that row reaches SigNoz along with every spec's row.
       - name: Assert clean teardown
         if: always()
         run: |
@@ -330,6 +321,37 @@ jobs:
               '.features += [{"feature":"uninstall","status":$s,"durationSeconds":$d}]' \
               results/summary.json > "$tmp" && mv "$tmp" results/summary.json
           fi
+
+      # Push LAST, so the payload contains the complete matrix — every spec row plus
+      # the `uninstall` row the teardown assertion just appended. Reads the summary the
+      # suite step wrote; runs no tests.
+      #
+      # `if: always()`, because a red suite is exactly when the dashboard must update.
+      # A failed push is deliberately loud (non-zero + `::error::`): a reporting path
+      # that breaks quietly means SigNoz goes stale and nobody notices.
+      #
+      # Accepted trade-off: if the JOB hits `timeout-minutes`, GitHub cancels the run and
+      # every remaining step with it, so that run reports nothing (the artifact upload is
+      # lost the same way). Acceptable now that the event-stream wedge is diagnosed in
+      # ~45 s instead of 300 s × 3 retries × 4 specs — the ~46 min that cancelled run 18
+      # (docs/KNOWN-ISSUES.md) is what made a mid-job cancellation likely at all — and a
+      # run that never reports is visible as staleness in
+      # `cosy_systemtest_last_run_timestamp_seconds`. A belt-and-braces push inside the
+      # suite step would buy that edge case at the price of double-reporting every
+      # healthy night: two timestamps per run and two sets of feature points, the earlier
+      # set missing `uninstall`, i.e. exactly the misleading matrix this step removes.
+      #
+      # Secrets are passed through `env:` and never interpolated into the shell command.
+      # `OTEL_INGEST_URL` falls back to the known ingress host when the repo variable is
+      # unset; if any of the three is missing (e.g. on a fork, where secrets are not
+      # exposed) the runner skips the push and exits 0.
+      - name: Push results to SigNoz
+        if: always()
+        env:
+          OTEL_INGEST_URL: ${{ vars.OTEL_INGEST_URL || 'https://otel-ingest.jannekeipert.de' }}
+          OTEL_INGEST_USER: ${{ secrets.OTEL_INGEST_USER }}
+          OTEL_INGEST_PASSWORD: ${{ secrets.OTEL_INGEST_PASSWORD }}
+        run: npx tsx scripts/run-systemtest.ts --push-only
 
       # Report + results always (14 days) so a red night is debuggable from the run.
       - name: Upload report and results
