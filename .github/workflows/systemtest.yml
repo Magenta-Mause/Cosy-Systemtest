@@ -1,12 +1,21 @@
 name: systemtest
 
-# Release channel only — nightly cron + manual trigger; results are pushed to
-# SigNoz over OTLP by the runner. The automatic staging channel
-# (repository_dispatch on an image push) arrives in a later phase.
+# Release channel only — nightly cron, manual trigger, and a push to
+# Magenta-Mause/Cosy's default branch; results are pushed to SigNoz over OTLP by
+# the runner. The automatic staging channel (dispatch on an image push) arrives
+# in a later phase.
 on:
   schedule:
     # 02:30 UTC nightly — installs the currently published Cosy from scratch.
     - cron: "30 2 * * *"
+  # Fired by Magenta-Mause/Cosy's trigger-systemtest.yml on every push to its
+  # default branch — that repo owns install_cosy.sh and config/, so a change
+  # there changes what a real install does. NOTE: repository_dispatch provides no
+  # `inputs` context, so `inputs.*` below resolve to empty and the install runs
+  # with no tag/ref overrides — i.e. exactly the release channel, which is the
+  # point. Do not give these inputs non-empty defaults or that silently breaks.
+  repository_dispatch:
+    types: [cosy-main-changed]
   workflow_dispatch:
     inputs:
       reason:
@@ -60,7 +69,13 @@ jobs:
     steps:
       - name: Log trigger reason
         run: |
-          echo "Trigger: ${{ github.event_name }} - ${{ github.event.inputs.reason || 'scheduled' }}"
+          echo "Trigger: ${{ github.event_name }} - ${{ github.event.inputs.reason || github.event.client_payload.reason || 'scheduled' }}"
+          # repository_dispatch carries the Cosy commit that caused this run, so a
+          # red here can be traced back to the change without opening the other repo.
+          if [ -n "${{ github.event.client_payload.cosy_sha }}" ]; then
+            echo "Triggered by Magenta-Mause/Cosy@${{ github.event.client_payload.cosy_sha }}"
+            echo "  ${{ github.event.client_payload.cosy_compare }}"
+          fi
 
       - uses: actions/checkout@v4
 
