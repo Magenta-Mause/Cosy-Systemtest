@@ -6,6 +6,7 @@ import {
   UI_ACTION_TIMEOUT_MS,
   WS_MESSAGE_TIMEOUT_MS,
 } from '@helpers/constants';
+import { detectUiStatusWedge } from '@helpers/docker';
 
 /** UI labels for server statuses (i18n serverStatus.*). */
 export const STATUS_LABEL = {
@@ -60,12 +61,28 @@ export class ServerDetailPage {
     return this.page.getByRole('button', { name: /^(Start|Shutdown)$/ });
   }
 
-  /** Assert the live status indicator shows the expected status label. */
+  /**
+   * Assert the live status indicator shows the expected status label.
+   *
+   * On timeout for RUNNING/STOPPED we ask Docker what the container is actually
+   * doing. A container that is demonstrably up while the indicator never reached
+   * "Running" is not a slow boot and not a bad selector — it is the backend's lost
+   * Docker event stream (docs/KNOWN-ISSUES.md), and saying so beats a bare
+   * "toBeVisible failed" that reads like a broken locator.
+   */
   async expectStatus(status: keyof typeof STATUS_LABEL, timeout = WS_MESSAGE_TIMEOUT_MS): Promise<void> {
-    // TODO(testid): add data-testid="server-status-indicator" to GameServerStatusIndicator
-    await expect(this.page.getByText(STATUS_LABEL[status], { exact: false }).first()).toBeVisible({
-      timeout,
-    });
+    try {
+      // TODO(testid): add data-testid="server-status-indicator" to GameServerStatusIndicator
+      await expect(this.page.getByText(STATUS_LABEL[status], { exact: false }).first()).toBeVisible({
+        timeout,
+      });
+    } catch (err) {
+      if (status === 'RUNNING' || status === 'STOPPED') {
+        const wedge = detectUiStatusWedge(this.uuid, status);
+        if (wedge) throw new Error(wedge, { cause: err });
+      }
+      throw err;
+    }
   }
 
   /**

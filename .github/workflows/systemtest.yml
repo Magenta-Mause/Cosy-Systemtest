@@ -100,6 +100,31 @@ jobs:
           sudo install -m 0644 -o "$(id -un)" /opt/cosy/config/.env "$RUNNER_TEMP/cosy-install.env"
           echo "INSTALL_ENV_FILE=$RUNNER_TEMP/cosy-install.env" >> "$GITHUB_ENV"
 
+      # Warm the game-server image BEFORE the suite. Two reasons:
+      #  1. No spec then pays for a cold pull, so the server-start budgets measure the
+      #     product rather than Docker Hub's throughput.
+      #  2. Docker Hub anonymously rate-limits by IP and GitHub runners share egress
+      #     IPs. Without this step a `toomanyrequests` reply lands INSIDE the backend,
+      #     where it surfaces as several servers stuck in a start state — i.e. four
+      #     mystery-red features. Here it is an unmissable infrastructure failure with
+      #     the registry's own message, which is what a rate-limit actually is.
+      # Retried, because a single transient registry blip must not red the nightly.
+      - name: Pre-pull game-server image
+        run: |
+          image="halftheopposite/tosios:latest"
+          for attempt in 1 2 3; do
+            if docker pull "$image"; then
+              echo "Pulled ${image} on attempt ${attempt}."
+              exit 0
+            fi
+            echo "Pull attempt ${attempt} for ${image} failed; retrying in 15s."
+            sleep 15
+          done
+          echo "::error::Could not pull ${image} after 3 attempts — INFRASTRUCTURE failure, \
+          not a Cosy defect. Docker Hub rate limiting (toomanyrequests) on a shared runner IP \
+          is the usual cause; check the pull output above. Every server spec would be red."
+          exit 1
+
       # Metrics-are-truth: this step exits 0 even when features fail; it only fails
       # on an infrastructure error (Playwright produced no report).
       - name: Run systemtest suite
@@ -123,9 +148,28 @@ jobs:
           docker stats --no-stream         > "$d/docker-stats.txt" 2>&1
           df -h                            > "$d/df.txt" 2>&1
           free -m                          > "$d/free.txt" 2>&1
-          docker logs cosy-backend --tail 400   > "$d/cosy-backend.log" 2>&1
-          docker logs cosy-database --tail 100  > "$d/cosy-database.log" 2>&1
-          journalctl -u docker --no-pager 2>/dev/null | tail -200 > "$d/journal-docker.txt" 2>&1
+          # FULL backend log, not a tail. Run 18's `--tail 400` captured 0.34 SECONDS
+          # of wall time (a single template-refresh stack trace burns ~260 lines), so
+          # the decisive "Error in Docker event listener" line — logged once, near the
+          # moment the backend went blind — fell outside the window and the root cause
+          # had to be inferred. The whole log of a ~1 h run is a few MB; that is cheap
+          # next to the traces/videos we already upload.
+          docker logs cosy-backend              > "$d/cosy-backend.log" 2>&1
+          docker logs cosy-database --tail 500  > "$d/cosy-database.log" 2>&1
+          journalctl -u docker --no-pager 2>/dev/null | tail -2000 > "$d/journal-docker.txt" 2>&1
+
+          # THE failure mode to look for first (see docs/KNOWN-ISSUES.md): the backend
+          # derives RUNNING/STOPPED solely from one Docker /events subscription that is
+          # never restarted. When it dies, every server freezes in AWAITING_UPDATE or
+          # STOPPING while its container is demonstrably fine. Extract the evidence
+          # into its own file so a red night is diagnosable at a glance.
+          grep -n -A 20 "Error in Docker event listener" "$d/cosy-backend.log" \
+            > "$d/docker-event-stream-errors.txt" 2>&1
+          if [ -s "$d/docker-event-stream-errors.txt" ]; then
+            echo "::warning::Backend lost its Docker event stream during this run \
+          — server statuses freeze in AWAITING_UPDATE/STOPPING. See \
+          results/diagnostics/docker-event-stream-errors.txt (PRODUCT bug, not a test flake)."
+          fi
 
           # OOM-killer evidence: if the kernel reaped a container mid-run this is
           # where it shows up (and explains "fetch failed" / stuck STOPPING).
@@ -137,6 +181,7 @@ jobs:
           echo "--- memory ---";      cat "$d/free.txt"
           echo "--- containers ---";  cat "$d/docker-ps.txt"
           echo "--- OOM matches ---"; cat "$d/dmesg-oom.txt"
+          echo "--- docker event-stream errors ---"; cat "$d/docker-event-stream-errors.txt"
           exit 0
 
       - name: Download uninstall_cosy.sh

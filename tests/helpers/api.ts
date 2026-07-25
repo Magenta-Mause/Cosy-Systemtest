@@ -23,6 +23,7 @@ import {
   STATUS_POLL_TIMEOUT_MS,
   TOSIOS_IMAGE,
 } from './constants';
+import { assertNotWedged, containerStateHint } from './docker';
 import type { AdminCredentials } from './install';
 
 export type GameServerStatus =
@@ -265,7 +266,8 @@ export class ApiClient {
     target: GameServerStatus,
     timeoutMs = STATUS_POLL_TIMEOUT_MS,
   ): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
     let last: GameServerStatus | undefined;
     while (Date.now() < deadline) {
       last = await this.getStatus(uuid);
@@ -273,10 +275,12 @@ export class ApiClient {
       if (last === 'FAILED' && target !== 'FAILED') {
         throw new Error(`Server ${uuid} reached FAILED while waiting for ${target}.`);
       }
+      assertNotWedged(uuid, last, Date.now() - startedAt);
       await sleep(STATUS_POLL_INTERVAL_MS);
     }
     throw new Error(
-      `Server ${uuid} did not reach ${target} within ${timeoutMs}ms (last status: ${last}).`,
+      `Server ${uuid} did not reach ${target} within ${timeoutMs}ms (last status: ${last}). ` +
+        containerStateHint(uuid),
     );
   }
 
@@ -294,25 +298,26 @@ export class ApiClient {
     uuid: string,
     timeoutMs = SERVER_COLD_START_TIMEOUT_MS,
   ): Promise<GameServerStatus | undefined> {
-    const deadline = Date.now() + timeoutMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
     let last: GameServerStatus | undefined;
     while (Date.now() < deadline) {
       last = await this.getStatus(uuid);
       if (last === 'STOPPED' || last === 'FAILED' || last === 'RUNNING') return last;
       // AWAITING_UPDATE / PULLING_IMAGE / STOPPING → still settling, keep waiting.
+      assertNotWedged(uuid, last, Date.now() - startedAt);
       await sleep(STATUS_POLL_INTERVAL_MS);
     }
     throw new Error(
-      `Server ${uuid} did not become startable within ${timeoutMs}ms (last status: ${last}).`,
+      `Server ${uuid} did not become startable within ${timeoutMs}ms (last status: ${last}). ` +
+        containerStateHint(uuid),
     );
   }
 
   /**
    * Idempotently bring a server to RUNNING. Replaces the ad-hoc
    * `if (status !== 'RUNNING') { startServer; waitForStatus('RUNNING') }` blocks
-   * that 409'd or timed out under image-pull contention (two PaperMC pulls now
-   * boot concurrently with the tosios specs on a 4-vCPU runner, stalling tosios
-   * servers in AWAITING_UPDATE). It waits until the server is startable, starts it
+   * that 409'd or timed out. It waits until the server is startable, starts it
    * unless it is already up, and tolerates a 409 from a worker that raced us to
    * the start of the shared-by-name server (we then simply wait for the RUNNING it
    * will reach). The RUNNING budget is generous by default; heavy servers pass a

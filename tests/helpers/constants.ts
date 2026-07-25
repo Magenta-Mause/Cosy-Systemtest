@@ -42,12 +42,17 @@ export const SERVER_START_TIMEOUT_MS = 120_000;
 
 /**
  * Generous start budget for a server whose start competes for host resources. The
- * async start goes STOPPED → AWAITING_UPDATE → (PULLING_IMAGE) → RUNNING, and on a
- * 4-vCPU runner the two PaperMC pulls (rcon + server-from-template) now boot
- * concurrently with the tosios specs, so a tosios server can sit in AWAITING_UPDATE
- * well past the standard 120 s budget. `ApiClient.ensureRunning` / `waitUntilStartable`
- * use this as their default, and the UI "reaches RUNNING" waits reuse it, so every
- * start tolerates a cold pull under contention. (See docs/KNOWN-ISSUES.md.)
+ * async start goes STOPPED → AWAITING_UPDATE → (PULLING_IMAGE) → RUNNING, and a cold
+ * pull plus scheduling on a 4-vCPU runner can outlast the standard 120 s budget.
+ * `ApiClient.ensureRunning` / `waitUntilStartable` use this as their default, and the
+ * UI "reaches RUNNING" waits reuse it.
+ *
+ * NOTE: a server parked in AWAITING_UPDATE is NOT, by itself, evidence of pull
+ * contention — that was the working theory until run 18 reproduced it with a serial
+ * run, no Minecraft and the image already local. The real cause is the backend losing
+ * its Docker event stream, which no timeout can outlast; `EVENT_STREAM_WEDGE_GRACE_MS`
+ * detects it and fails fast rather than spending this budget. See docs/KNOWN-ISSUES.md
+ * ("backend loses the Docker event stream").
  */
 export const SERVER_COLD_START_TIMEOUT_MS = 300_000;
 
@@ -62,6 +67,26 @@ export const WS_MESSAGE_TIMEOUT_MS = 30_000;
 
 /** Poll interval when waiting for an async server-status transition via the API. */
 export const STATUS_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * Prefix Cosy gives game-server containers (`cosy-<uuid>`) — backend default
+ * `COSY_DOCKER_CONTAINER_PREFIX`, which the compose install does not override.
+ * Used only by the read-only Docker probe in `helpers/docker.ts`.
+ */
+export const GAME_SERVER_CONTAINER_PREFIX = 'cosy-';
+
+/**
+ * Grace period before a *transitional* status (AWAITING_UPDATE / STOPPING) that
+ * disagrees with the real container state is called a WEDGE rather than slowness.
+ *
+ * The disagreement itself is already unambiguous — a running container whose server
+ * still reports AWAITING_UPDATE means the backend never received the Docker `start`
+ * event — but the event and our poll can legitimately cross in flight for a moment.
+ * 45 s is orders of magnitude more than that race needs while still collapsing a
+ * wedged 300 s × 3-retry black hole (run 18 burned ~46 min and got the job cancelled
+ * at its 60-minute budget) into a fast, precisely-named failure.
+ */
+export const EVENT_STREAM_WEDGE_GRACE_MS = 45_000;
 
 /** How long the API client waits for a game-server to reach a target status. */
 export const STATUS_POLL_TIMEOUT_MS = SERVER_START_TIMEOUT_MS;

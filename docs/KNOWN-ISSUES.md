@@ -280,3 +280,100 @@ OOM-killer / disk-pressure evidence (`dmesg-oom.txt`, `df.txt`, `docker-stats.tx
 confirm whether this is resource exhaustion rather than a product bug. (b) If it is
 environmental, move RCON coverage to a **lighter RCON-capable image** so the round-trip
 is testable on a standard runner, rather than keeping a Minecraft-sized dependency.
+
+## CONFIRMED PRODUCT BUG — the backend loses its Docker event stream and never recovers
+
+**Symptom.** Partway through a run, *every* game-server operation stops completing.
+Servers sit in **`AWAITING_UPDATE`** forever after a start, and in **`STOPPING`**
+forever after a stop, while their containers are demonstrably fine. Specs report
+`Server <uuid> did not reach RUNNING within 300000ms (last status: AWAITING_UPDATE)`
+or `did not become startable within 300000ms (last status: STOPPING)`. Once it
+happens, **nothing short of a backend restart recovers** — so every later
+server-touching spec is red too, and the suite looks like it "regressed" when nothing
+in the tests changed.
+
+**It is not the test suite, and it is not resource contention.** Run 18
+(`30131313148`) hit it with `rcon` SKIPPED (no Minecraft at all), `workers: 1`
+(serial — exactly one server starting at a time) and the 50 MB tosios image already
+local. The diagnostics rule out every environmental explanation:
+
+- `free.txt`: **7.6 GB free RAM**, 13.5 GB available, swap untouched.
+- `df.txt`: **85 GB free disk** (42 % used).
+- `docker-stats.txt`: the game container at **0.02 % CPU, 46 MiB / 512 MiB**.
+- `dmesg-oom.txt`: **empty** — no OOM kill.
+- `docker-ps.txt`: `cosy-backend` **Up 59 minutes (healthy)**, never restarted.
+
+**The decisive evidence.** At capture time the container
+`cosy-3959d88f-61b6-4982-9f50-bfb6b4b6fae8` was **`Up About a minute`**, while the
+nginx access log shows the suite polling that exact server **62 times over two solid
+minutes** (23:32:06 → 23:34:07) — and every one of the 61 polls after the first
+returned a **byte-identical 1836-byte response**. The container was running; the API
+never once said so.
+
+The mirror image appeared in `server-lifecycle`: the *same* uuid
+`faf8d16f-2a53-4883-9032-0094a6f09531` was stuck in `STOPPING` across **two separate
+300 s retries** — its container had already been stopped and removed.
+
+**Root cause (read from the backend source).** `RUNNING` and `STOPPED` have exactly
+one source: a single Docker `/events` subscription.
+
+1. `DockerEventHandler.startEventListener()` opens `client.eventsCmd()…exec(callback)`
+   **once**, from `@PostConstruct`.
+2. Its `onError` **only logs** (`log.error("Error in Docker event listener", …)`).
+   There is no reconnect, no backoff, no watchdog; `onComplete` is not handled at all.
+3. `GameServerService.handleGameServerEngineEvent` is the **only** caller that sets
+   `RUNNING` (on `start`) and `STOPPED` (on `die`).
+4. The persisted status is reconciled against real container state **exactly once**,
+   in `GameServerService.init()` — i.e. only at boot.
+
+So the moment that one stream ends, the backend is permanently blind. It still
+creates, starts, stops and removes containers correctly; it simply never learns that
+any of it happened. Note the asymmetry that makes this so confusing: the *commands*
+keep working, so `docker ps` looks healthy and nothing in the backend log looks
+broken — only the status machine is frozen.
+
+**Likely trigger.** `EngineConfiguration.dockerClient()` builds the transport with
+`.responseTimeout(Duration.ofSeconds(45))`. That is a socket read timeout, and
+`/events` is a long-lived stream that emits nothing while no container starts or
+dies — so a quiet window trips a `SocketTimeoutException` on the stream, which lands
+in the un-recovering `onError`. This is a long-standing docker-java footgun: a
+`responseTimeout` is right for one-shot commands and wrong for streaming endpoints.
+It also explains the run-to-run non-determinism — whether the stream dies depends on
+the accidental spacing of container activity, which is why run 17 (same code, same
+image) stayed green end to end.
+
+**Suggested product fixes** (backend, not this repo):
+
+1. Make the event subscription **self-healing**: reconnect with backoff in `onError`
+   *and* `onComplete`, and re-reconcile statuses from real container state on each
+   reconnect (`GameServerService.init()` already contains that reconciliation logic —
+   it just never runs again).
+2. Do not apply `responseTimeout` to streaming commands (`eventsCmd`, `logsCmd`), or
+   use a separate `DockerHttpClient` for them.
+3. Belt and braces: a periodic reconciliation sweep, so a missed event self-corrects
+   instead of hanging a server forever.
+
+**How the suite reports it now.** `helpers/docker.ts` probes the real container state
+whenever a transitional status outlives `EVENT_STREAM_WEDGE_GRACE_MS` (45 s):
+
+| waiting for | actual container   | verdict                              |
+|-------------|--------------------|--------------------------------------|
+| RUNNING     | running            | the `start` event was never received |
+| STOPPED     | gone / not running | the `die` event was never received   |
+
+On a match, `ApiClient.waitForStatus` / `waitUntilStartable` and
+`ServerDetailPage.expectStatus` fail **immediately** with a message naming the
+product bug, instead of burning 300 s three times over and reporting a generic
+timeout. Ordinary timeouts now also append the real container state, and the
+workflow extracts `docker-event-stream-errors.txt` from the (now complete) backend
+log. If Docker is not queryable from the test process the diagnosis is skipped and
+plain timeout behaviour applies.
+
+**Why this matters for the budget.** In run 18 the wedge cost `300 s × 3 retries ×
+4 specs` ≈ **46 minutes**, which pushed the job past its 60-minute
+`timeout-minutes` — GitHub **cancelled** it at 23:34:05, mid-`webhooks`. The last two
+"failures" in that run are teardown artifacts, not findings: `TypeError: fetch failed`
+is the cancelled process, and `ERR_CONNECTION_REFUSED` is the `Uninstall Cosy` step
+(23:34:09) tearing the stack down while Playwright was still winding down. With
+fail-fast detection the same wedge costs ~45 s per attempt, so the suite finishes
+inside its budget and still records a row per feature.
