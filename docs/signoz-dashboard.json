@@ -2062,7 +2062,7 @@
       "bucketCount": 30,
       "bucketWidth": 0,
       "decimalPrecision": 0,
-      "timePreferance": "GLOBAL_TIME",
+      "timePreferance": "LAST_1_WEEK",
       "contextLinks": {
         "linksData": [
           {
