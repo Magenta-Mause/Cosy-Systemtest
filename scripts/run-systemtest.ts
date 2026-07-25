@@ -1,15 +1,22 @@
 /**
- * Phase-1 systemtest runner.
+ * Systemtest runner.
  *
  * Runs the Playwright suite, parses the JSON report into one row per feature
- * (spec file), writes `results/summary.json`, and prints a table.
+ * (spec file), writes `results/summary.json`, prints a table, and pushes the
+ * per-feature results to SigNoz as OTLP-HTTP metrics.
  *
  * Semantics: "metrics are truth, exit 0". Test failures do NOT fail this process
- * — the per-feature results are the signal, and the dashboard/alerts (Phase 3)
- * decide what is broken. The process exits non-zero ONLY on an infrastructure
- * error: Playwright could not produce a parseable report at all.
+ * — the per-feature results are the signal, and the dashboard/alerts decide what
+ * is broken. The process exits non-zero ONLY on an infrastructure error:
+ *   - Playwright could not produce a parseable report at all, or
+ *   - the metric push failed. A broken reporting path must not hide behind a
+ *     green job; nobody notices a dashboard that silently stopped updating.
+ * `results/summary.json` is written (and uploaded as an artifact) before the push
+ * is attempted, so a failed push never costs us the results.
  *
- * OTLP metric push is not wired yet (Phase 3) — see `pushMetrics()`.
+ * The push is SKIPPED with an INFO log — and exit 0 — unless all three of
+ * `OTEL_INGEST_URL`, `OTEL_INGEST_USER`, `OTEL_INGEST_PASSWORD` are set, so local
+ * runs and forks (which have no ingest credentials) behave exactly as before.
  */
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -18,6 +25,27 @@ import * as path from 'node:path';
 const RESULTS_DIR = path.resolve('results');
 const JSON_REPORT = path.join(RESULTS_DIR, 'playwright-report.json');
 const SUMMARY = path.join(RESULTS_DIR, 'summary.json');
+
+// ── OTLP metric push ─────────────────────────────────────────────────────────
+/** `service.name` resource attribute — the primary group-by in SigNoz. */
+const SERVICE_NAME = 'cosy-systemtest';
+/** Instrumentation scope the metrics are reported under. */
+const SCOPE_NAME = 'cosy-systemtest-runner';
+/** OTLP-HTTP metrics path. The ingress matches it with `pathType: Exact`. */
+const OTLP_METRICS_PATH = '/v1/metrics';
+const PUSH_TIMEOUT_MS = 15_000;
+const PUSH_ATTEMPTS = 3;
+const PUSH_RETRY_DELAY_MS = 3_000;
+/** Cap on collector error text echoed into the log. */
+const ERROR_BODY_CHARS = 500;
+
+const METRIC = {
+  featureStatus: 'cosy_systemtest_feature_status',
+  featureSkipped: 'cosy_systemtest_feature_skipped',
+  featureDuration: 'cosy_systemtest_feature_duration_seconds',
+  runSuccess: 'cosy_systemtest_run_success',
+  lastRunTimestamp: 'cosy_systemtest_last_run_timestamp_seconds',
+} as const;
 
 type FeatureStatus = 'passed' | 'failed' | 'skipped';
 
@@ -161,18 +189,288 @@ function printTable(summary: Summary): void {
   console.log(`  ---\n  ${summary.features.length} features, ${failed} failed`);
 }
 
-/**
- * Phase 3: push the per-feature results to SigNoz over OTLP-HTTP. Not implemented
- * yet — Phase 1 is a reporting dry-run (results only as GitHub artifacts).
- */
-export function pushMetrics(_summary: Summary): never {
-  throw new Error(
-    'pushMetrics(): OTLP metric push is Phase 3 — not implemented yet. ' +
-      'Phase 1 reports results only as the results/ artifact.',
-  );
+// ── OTLP-HTTP/JSON encoding ──────────────────────────────────────────────────
+// Hand-built to avoid pulling the OTel SDK into a repo that otherwise only needs
+// Playwright. Two encoding rules from the proto3 JSON mapping matter, and getting
+// either wrong is how a payload gets a 200 and is then silently dropped:
+//   - int64/fixed64 fields (`timeUnixNano`, `asInt`) are DECIMAL STRINGS;
+//   - `asDouble` is a plain JSON number.
+
+interface OtlpAttribute {
+  key: string;
+  value: { stringValue: string };
+}
+interface OtlpNumberDataPoint {
+  attributes: OtlpAttribute[];
+  timeUnixNano: string;
+  asInt?: string;
+  asDouble?: number;
+}
+interface OtlpMetric {
+  name: string;
+  description: string;
+  unit: string;
+  gauge: { dataPoints: OtlpNumberDataPoint[] };
+}
+interface OtlpPayload {
+  resourceMetrics: {
+    resource: { attributes: OtlpAttribute[] };
+    scopeMetrics: { scope: { name: string }; metrics: OtlpMetric[] }[];
+  }[];
 }
 
-function main(): void {
+/** Response shape we care about: a 2xx can still report dropped points. */
+interface OtlpResponse {
+  partialSuccess?: { rejectedDataPoints?: string | number; errorMessage?: string };
+}
+
+function attribute(key: string, value: string): OtlpAttribute {
+  return { key, value: { stringValue: value } };
+}
+
+function gauge(
+  name: string,
+  description: string,
+  unit: string,
+  dataPoints: OtlpNumberDataPoint[],
+): OtlpMetric {
+  return { name, description, unit, gauge: { dataPoints } };
+}
+
+/**
+ * Attributes that describe WHAT was tested, not which feature — so every data
+ * point is attributable to a build and to the run that produced it (see the
+ * "a result must be attributable to a build" convention in CLAUDE.md).
+ * Image tags and run URL change per run, so each run adds one series per metric;
+ * at one nightly run that is a bounded, deliberate cost.
+ */
+function resourceAttributes(summary: Summary): OtlpAttribute[] {
+  const attributes = [
+    attribute('service.name', SERVICE_NAME),
+    // House convention is a prod/staging split via `deployment.environment`; here
+    // the channel IS the environment (`release` = the published product).
+    attribute('deployment.environment', summary.channel),
+    attribute('cosy.backend.image_tag', summary.versions.backend ?? 'unknown'),
+    attribute('cosy.frontend.image_tag', summary.versions.frontend ?? 'unknown'),
+  ];
+  // Absent outside GitHub Actions — omit rather than invent a placeholder link.
+  if (summary.runUrl) attributes.push(attribute('cosy.systemtest.run_url', summary.runUrl));
+  return attributes;
+}
+
+/**
+ * Build the OTLP payload for one run.
+ *
+ * How `skipped` is represented — deliberately, because reporting a skip as a pass
+ * would be a lie and reporting it as a failure would page for a feature nobody
+ * tested: a skipped feature is **omitted** from `feature_status` and from
+ * `feature_duration_seconds` (a 0 there would read as "it got fast"), and is
+ * instead flagged by `feature_skipped` = 1. Every feature reports
+ * `feature_skipped` (0 when it ran), so the series never disappears and "this
+ * feature stopped running" is itself alertable.
+ */
+export function buildMetricsPayload(summary: Summary): OtlpPayload {
+  // Milliseconds × 1e6 exceeds Number.MAX_SAFE_INTEGER — must go through BigInt.
+  const observedAtMs = Date.parse(summary.generatedAt);
+  const timeUnixNano = (BigInt(observedAtMs) * 1_000_000n).toString();
+
+  const channelAttributes = [attribute('channel', summary.channel)];
+  const featureAttributes = (feature: string): OtlpAttribute[] => [
+    attribute('feature', feature),
+    ...channelAttributes,
+  ];
+  const executed = summary.features.filter((f) => f.status !== 'skipped');
+  const anyFailed = summary.features.some((f) => f.status === 'failed');
+
+  const metrics: OtlpMetric[] = [
+    gauge(
+      METRIC.featureStatus,
+      '1 = feature passed, 0 = feature failed. Skipped features are absent by ' +
+        'design — see cosy_systemtest_feature_skipped.',
+      '1',
+      executed.map((f) => ({
+        attributes: featureAttributes(f.feature),
+        timeUnixNano,
+        asInt: f.status === 'passed' ? '1' : '0',
+      })),
+    ),
+    gauge(
+      METRIC.featureSkipped,
+      '1 = feature did not run in this run, 0 = it ran (passed or failed).',
+      '1',
+      summary.features.map((f) => ({
+        attributes: featureAttributes(f.feature),
+        timeUnixNano,
+        asInt: f.status === 'skipped' ? '1' : '0',
+      })),
+    ),
+    gauge(
+      METRIC.featureDuration,
+      'Wall-clock seconds the feature spent running. Skipped features are absent.',
+      's',
+      executed.map((f) => ({
+        attributes: featureAttributes(f.feature),
+        timeUnixNano,
+        asDouble: f.durationSeconds,
+      })),
+    ),
+    gauge(
+      METRIC.runSuccess,
+      '1 = no feature failed in this run, 0 = at least one did. Skips do not count ' +
+        'as failures — pair with cosy_systemtest_feature_skipped.',
+      '1',
+      [{ attributes: channelAttributes, timeUnixNano, asInt: anyFailed ? '0' : '1' }],
+    ),
+    gauge(
+      METRIC.lastRunTimestamp,
+      'Unix time the run finished — the staleness signal for the nightly.',
+      's',
+      [{ attributes: channelAttributes, timeUnixNano, asDouble: Math.floor(observedAtMs / 1000) }],
+    ),
+  ];
+
+  return {
+    resourceMetrics: [
+      {
+        resource: { attributes: resourceAttributes(summary) },
+        // A metric with no data points carries no information; drop it (happens
+        // when literally every feature skipped, e.g. a local run with no install).
+        scopeMetrics: [
+          {
+            scope: { name: SCOPE_NAME },
+            metrics: metrics.filter((m) => m.gauge.dataPoints.length > 0),
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** Distinguishes "retry might help" (5xx, timeout) from "it won't" (401, bad payload). */
+class PushError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = 'PushError';
+  }
+}
+
+/**
+ * A 2xx is not proof the data landed: OTLP reports dropped points in
+ * `partialSuccess.rejectedDataPoints`. Treat any rejection as a failed push —
+ * otherwise a malformed payload no-ops in silence, which is the exact failure
+ * mode this whole reporting path exists to avoid.
+ */
+function assertNothingRejected(responseBody: string): void {
+  if (!responseBody.trim()) return;
+  let parsed: OtlpResponse;
+  try {
+    parsed = JSON.parse(responseBody) as OtlpResponse;
+  } catch {
+    return; // Not JSON, so nothing to assert — the 2xx stands.
+  }
+  const rejected = Number(parsed.partialSuccess?.rejectedDataPoints ?? 0);
+  if (rejected > 0) {
+    throw new PushError(
+      `collector accepted the request but rejected ${rejected} data points: ` +
+        `${parsed.partialSuccess?.errorMessage || '(no error message)'}`,
+      false,
+    );
+  }
+}
+
+async function postOtlp(endpoint: string, basicAuth: string, body: string): Promise<void> {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Basic ${basicAuth}` },
+    body,
+    signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    // 4xx is a wrong credential or a bad payload — a retry changes nothing.
+    const retryable = response.status >= 500 || response.status === 408 || response.status === 429;
+    throw new PushError(
+      `HTTP ${response.status} ${response.statusText} — ${text.slice(0, ERROR_BODY_CHARS)}`,
+      retryable,
+    );
+  }
+  assertNothingRejected(text);
+}
+
+type PushOutcome = 'pushed' | 'skipped';
+
+/**
+ * Push the per-feature results to SigNoz over authenticated OTLP-HTTP.
+ *
+ * Returns `'skipped'` (no credentials configured — local/fork runs) or `'pushed'`.
+ * Throws on a genuine push failure; the caller turns that into a non-zero exit.
+ */
+export async function pushMetrics(summary: Summary): Promise<PushOutcome> {
+  const ingestUrl = optionalEnv('OTEL_INGEST_URL');
+  const user = optionalEnv('OTEL_INGEST_USER');
+  const password = optionalEnv('OTEL_INGEST_PASSWORD');
+
+  if (!ingestUrl || !user || !password) {
+    console.log(
+      '\nINFO: OTLP push skipped — OTEL_INGEST_URL, OTEL_INGEST_USER and OTEL_INGEST_PASSWORD ' +
+        'are not all set. results/summary.json holds the full result. This is the expected ' +
+        'behaviour for local runs and forks; CI sets all three.',
+    );
+    return 'skipped';
+  }
+
+  const endpoint = `${ingestUrl.replace(/\/+$/, '')}${OTLP_METRICS_PATH}`;
+  const payload = buildMetricsPayload(summary);
+  const body = JSON.stringify(payload);
+  const dataPoints = payload.resourceMetrics[0].scopeMetrics[0].metrics.reduce(
+    (sum, metric) => sum + metric.gauge.dataPoints.length,
+    0,
+  );
+  // Never build the credentials into a shell string or log them; only the
+  // endpoint is ever printed.
+  const basicAuth = Buffer.from(`${user}:${password}`).toString('base64');
+
+  let lastError = 'unknown error';
+  for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt++) {
+    try {
+      await postOtlp(endpoint, basicAuth, body);
+      console.log(`\nPushed ${dataPoints} data points to ${endpoint} (attempt ${attempt}).`);
+      return 'pushed';
+    } catch (err) {
+      lastError = describeError(err);
+      const retryable = !(err instanceof PushError) || err.retryable;
+      if (!retryable || attempt === PUSH_ATTEMPTS) break;
+      console.error(
+        `OTLP push attempt ${attempt}/${PUSH_ATTEMPTS} failed: ${lastError} — ` +
+          `retrying in ${PUSH_RETRY_DELAY_MS} ms.`,
+      );
+      await sleep(PUSH_RETRY_DELAY_MS);
+    }
+  }
+  throw new Error(`OTLP push to ${endpoint} failed: ${lastError}`);
+}
+
+/**
+ * `fetch` rejects with a bare "fetch failed" — the reason an operator actually
+ * needs (ECONNREFUSED, DNS failure, TLS error) sits on `cause`.
+ */
+function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const { cause } = err;
+  return cause instanceof Error && cause.message && cause.message !== err.message
+    ? `${err.message} (${cause.message})`
+    : err.message;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function main(): Promise<void> {
   const pwExit = runPlaywright();
 
   if (!fs.existsSync(JSON_REPORT)) {
@@ -194,13 +492,30 @@ function main(): void {
     process.exit(1);
   }
 
+  // Written BEFORE the push, so a broken reporting path never costs us the
+  // results — the summary is uploaded as an artifact either way.
   const summary = writeSummary(features);
   printTable(summary);
-  console.log(
-    `\nReporting dry-run (Phase 1): wrote ${path.relative(process.cwd(), SUMMARY)} — ` +
-      'no OTLP push. Exiting 0 regardless of test outcomes.',
-  );
+  console.log(`\nWrote ${path.relative(process.cwd(), SUMMARY)}.`);
+
+  try {
+    await pushMetrics(summary);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(
+      `::error::Systemtest metric push FAILED — the SigNoz dashboard will go stale ` +
+        `for this run. ${message}`,
+    );
+    console.error(
+      'The test results themselves are intact in results/summary.json (uploaded as an ' +
+        'artifact). This is a REPORTING/infrastructure failure, not a product failure — ' +
+        'failing the job so a silently broken reporting path cannot go unnoticed.',
+    );
+    process.exit(1);
+  }
+
   // Metrics-are-truth: never fail the process on red tests.
+  console.log('Exiting 0 regardless of test outcomes (metrics are truth).');
   process.exit(0);
 }
 
@@ -216,4 +531,10 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-main();
+main().catch((err) => {
+  console.error(
+    `::error::Infrastructure error in the systemtest runner: ` +
+      `${err instanceof Error ? (err.stack ?? err.message) : err}`,
+  );
+  process.exit(1);
+});

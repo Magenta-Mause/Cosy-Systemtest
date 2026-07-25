@@ -1,7 +1,8 @@
 name: systemtest
 
-# Phase 1: release channel only — nightly cron + manual trigger. The staging
-# channel (repository_dispatch) and OTLP reporting arrive in later phases.
+# Release channel only — nightly cron + manual trigger; results are pushed to
+# SigNoz over OTLP by the runner. The automatic staging channel
+# (repository_dispatch on an image push) arrives in a later phase.
 on:
   schedule:
     # 02:30 UTC nightly — installs the currently published Cosy from scratch.
@@ -197,9 +198,20 @@ jobs:
           is the usual cause; check the pull output above. Every server spec would be red."
           exit 1
 
-      # Metrics-are-truth: this step exits 0 even when features fail; it only fails
-      # on an infrastructure error (Playwright produced no report).
+      # Metrics-are-truth: this step exits 0 even when features fail. It fails only
+      # on an infrastructure error — Playwright produced no parseable report, or the
+      # OTLP push failed. A failed push is deliberately loud: a reporting path that
+      # breaks quietly means the SigNoz dashboard goes stale and nobody notices.
+      #
+      # Secrets are passed through `env:` and never interpolated into the shell
+      # command. `OTEL_INGEST_URL` falls back to the known ingress host when the repo
+      # variable is unset; if any of the three is missing (e.g. on a fork, where
+      # secrets are not exposed) the runner skips the push and still exits 0.
       - name: Run systemtest suite
+        env:
+          OTEL_INGEST_URL: ${{ vars.OTEL_INGEST_URL || 'https://otel-ingest.jannekeipert.de' }}
+          OTEL_INGEST_USER: ${{ secrets.OTEL_INGEST_USER }}
+          OTEL_INGEST_PASSWORD: ${{ secrets.OTEL_INGEST_PASSWORD }}
         run: npx tsx scripts/run-systemtest.ts
 
       # Stack diagnostics BEFORE uninstall (which destroys the evidence). Several
@@ -269,6 +281,11 @@ jobs:
 
       # Teardown is itself a tested feature: assert nothing is left behind and append
       # an `uninstall` row to the summary the runner wrote.
+      #
+      # NOTE: this row is appended AFTER the runner already pushed its metrics, so
+      # `uninstall` appears in the results artifact but NOT in SigNoz. Reporting it
+      # too needs a second, push-only invocation here (deliberately not added: the
+      # push must stay inside the suite step so a hard-timeout still reports).
       - name: Assert clean teardown
         if: always()
         run: |

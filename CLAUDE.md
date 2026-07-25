@@ -29,7 +29,14 @@ npx playwright test --list   # lists all specs even with no install present
 | `COSY_CHANNEL` | Channel label in `results/summary.json`; the workflow sets `staging` when a manual run pinned an image tag, else `release` | `release` |
 | `COSY_BACKEND_TAG` | Installed backend image tag, written to `summary.json` → `versions.backend` (workflow reads it back out of the installed `.env`) | — (`null` in the summary) |
 | `COSY_FRONTEND_TAG` | Installed frontend image tag → `versions.frontend` | — (`null` in the summary) |
+| `OTEL_INGEST_URL` | Base URL of the authenticated OTLP-HTTP ingest (SigNoz collector); the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics`. CI sets `https://otel-ingest.jannekeipert.de` (overridable via the `OTEL_INGEST_URL` repo variable) | — (push skipped) |
+| `OTEL_INGEST_USER` | HTTP Basic user for the ingest (GitHub secret) | — (push skipped) |
+| `OTEL_INGEST_PASSWORD` | HTTP Basic password for the ingest (GitHub secret) | — (push skipped) |
 | `CI` | CI reporters + retries | — |
+
+**The push is all-or-nothing on config:** unless all three `OTEL_INGEST_*` are set and
+non-empty, the runner logs one INFO line and exits 0 — local runs and forks are
+unaffected. When they *are* set, a failed push exits **1** (see convention 8).
 
 ## Hard conventions (do not break)
 
@@ -55,15 +62,30 @@ npx playwright test --list   # lists all specs even with no install present
 7. **Skip guard:** install-gated specs call `runsOnlyWithInstall()` in the describe
    body so they stay listable without an install and skip with one uniform reason.
 8. **Runner semantics:** `scripts/run-systemtest.ts` exits 0 even when features fail
-   (metrics are truth); it fails only on infrastructure errors (no parseable report).
-   OTLP push is a Phase-3 stub (`pushMetrics()` throws) — do not wire it in Phase 1.
-9. **Install/uninstall belong to the workflow**, not to Playwright. `uninstall` is a
-   workflow-appended row in `results/summary.json`, not a spec.
-10. **A result must be attributable to a build.** The workflow's `backend_tag` /
+   (metrics are truth); it fails only on infrastructure errors — no parseable report,
+   or a **failed OTLP push**. A push that breaks quietly would leave the dashboard
+   stale with nobody noticing, so it is loud and red. `results/summary.json` is always
+   written *before* the push, so a failed push never costs us the results.
+9. **Never report a skip as a pass.** A skipped feature is omitted from
+   `cosy_systemtest_feature_status` and `cosy_systemtest_feature_duration_seconds`
+   (a `0` duration would read as "it got faster") and flagged by
+   `cosy_systemtest_feature_skipped=1`; every feature reports that gauge (`0` when it
+   ran) so "this feature stopped running" stays visible instead of becoming a gap.
+   `cosy_systemtest_run_success` only means "nothing failed" — never read it without
+   the skipped gauge. If you add a metric, keep this rule: absence of evidence is
+   never reported as evidence of health.
+10. **Install/uninstall belong to the workflow**, not to Playwright. `uninstall` is a
+    workflow-appended row in `results/summary.json`, not a spec. It is appended
+    *after* the runner pushed, so it reaches the artifact but **not** SigNoz —
+    keep that in mind before treating the dashboard as the whole matrix.
+11. **A result must be attributable to a build.** The workflow's `backend_tag` /
     `frontend_tag` / `config_ref` dispatch inputs are forwarded to `install_cosy.sh`
     only when non-empty; the effective tags are then read back from the installed
     `.env` into `summary.json` (`versions`), and any override flips `channel` to
-    `staging`. Never drop those fields — a red row is meaningless without them.
+    `staging`. The same values ride along as OTLP resource attributes
+    (`cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_url`),
+    so a data point in SigNoz names its build and its run. Never drop those fields —
+    a red row is meaningless without them.
 
 ## Layout
 

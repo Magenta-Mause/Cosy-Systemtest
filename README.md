@@ -6,14 +6,16 @@ new version (nightly + on demand) they install Cosy from scratch via
 drive each feature through the real web UI, and publish a per-feature pass/fail
 matrix.
 
-**Phase 2** (this state): the full feature matrix. Phase 1 delivered the install →
-core lifecycle → uninstall path (`@core`); Phase 2 adds the remaining feature specs
-(`@extended`). Nightly + manual trigger, results as a GitHub artifact (reporting
-dry-run); a manual run can pin a specific backend/frontend image tag to verify a fix
-before release (recorded as the `staging` channel — see
-[below](#testing-a-specific-not-yet-released-build)). OTLP/SigNoz reporting and the
-automatic staging trigger (`repository_dispatch` on image push) come in later phases. See [`Cosy/PLAN-systemtest.md`](https://github.com/Magenta-Mause/Cosy)
-for the full roadmap.
+**Phase 3** (this state): the full feature matrix, reported to SigNoz. Phase 1
+delivered the install → core lifecycle → uninstall path (`@core`); Phase 2 added the
+remaining feature specs (`@extended`); Phase 3 pushes the per-feature results as OTLP
+metrics (see [Reporting](#reporting-what-lands-in-signoz)). Nightly + manual trigger,
+results also kept as a GitHub artifact; a manual run can pin a specific
+backend/frontend image tag to verify a fix before release (recorded as the `staging`
+channel — see [below](#testing-a-specific-not-yet-released-build)). The automatic
+staging trigger (`repository_dispatch` on image push) comes in a later phase. See
+[`Cosy/PLAN-systemtest.md`](https://github.com/Magenta-Mause/Cosy) for the full
+roadmap.
 
 ## Features covered
 
@@ -115,15 +117,23 @@ listable and typecheckable on any machine.
 | `COSY_CHANNEL` | Channel label written into `results/summary.json` (`release`, or `staging` when a run pinned an image tag) | `release` |
 | `COSY_BACKEND_TAG` | Installed backend image tag, recorded as `versions.backend` in the summary | — (`null`) |
 | `COSY_FRONTEND_TAG` | Installed frontend image tag, recorded as `versions.frontend` in the summary | — (`null`) |
+| `OTEL_INGEST_URL` | Base URL of the OTLP-HTTP ingest; the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics` | — (push skipped) |
+| `OTEL_INGEST_USER` | HTTP Basic user for the ingest | — (push skipped) |
+| `OTEL_INGEST_PASSWORD` | HTTP Basic password for the ingest | — (push skipped) |
 | `CI` | Enables CI reporters (github/html/json) + retries | — |
 
 ## How it runs in CI
 
 `.github/workflows/systemtest.yml` (nightly `30 2 * * *` + `workflow_dispatch`):
 checkout → Node 22 → `npm ci` → `playwright install --with-deps chromium` → install
-Cosy → poll health (≤10 min) → run the suite → uninstall + assert clean teardown →
-upload the report and results. The runner exits 0 even when features fail (metrics
-are truth); the job only goes red on infrastructure errors.
+Cosy → poll health (≤10 min) → run the suite → push metrics to SigNoz → uninstall +
+assert clean teardown → upload the report and results. The runner exits 0 even when
+features fail (metrics are truth); the job only goes red on infrastructure errors —
+including a failed metric push (see [Reporting](#reporting-what-lands-in-signoz)).
+The ingest URL comes from the `OTEL_INGEST_URL` repo variable (defaulting to
+`https://otel-ingest.jannekeipert.de`) and the credentials from the
+`OTEL_INGEST_USER` / `OTEL_INGEST_PASSWORD` repo secrets, passed to the step via
+`env:` — never interpolated into a shell command.
 
 ### Testing a specific, not-yet-released build
 
@@ -143,6 +153,52 @@ Any override switches the summary's `channel` from `release` to `staging`. Whate
 was installed is read back out of the generated `.env` and stored in
 `results/summary.json` under `versions` (`backend` / `frontend`), so every stored
 result says which build it tested.
+
+## Reporting: what lands in SigNoz
+
+After the suite, the runner POSTs the results to the authenticated OTLP-HTTP ingest
+(`${OTEL_INGEST_URL}/v1/metrics`, HTTP Basic) which fronts the SigNoz collector. All
+five metrics are gauges, written once per run:
+
+| Metric | Attributes | Meaning |
+|---|---|---|
+| `cosy_systemtest_feature_status` | `feature`, `channel` | `1` passed, `0` failed. **Skipped features are not reported here.** |
+| `cosy_systemtest_feature_skipped` | `feature`, `channel` | `1` the feature did not run, `0` it ran |
+| `cosy_systemtest_feature_duration_seconds` | `feature`, `channel` | Wall-clock seconds; skipped features are absent |
+| `cosy_systemtest_run_success` | `channel` | `1` if no feature failed, else `0` |
+| `cosy_systemtest_last_run_timestamp_seconds` | `channel` | Unix time of the run — the staleness signal |
+
+Resource attributes on every data point: `service.name=cosy-systemtest`,
+`deployment.environment=<channel>`, `cosy.backend.image_tag`,
+`cosy.frontend.image_tag` and `cosy.systemtest.run_url` — so any point names the
+build it tested and links back to the GitHub run (and from there to the HTML report,
+traces and videos).
+
+**How a skip is represented, and why.** A skipped feature is *untested*, which is
+neither a pass nor a failure. Reporting it as `1` would claim a feature works when
+nothing checked it; reporting `0` would page for a product that may be perfectly
+healthy. So a skip is **omitted** from `feature_status` and from
+`feature_duration_seconds` (a `0` there would show up as "the feature got faster"),
+and is stated explicitly by `feature_skipped=1`. Every feature — skipped or not —
+reports `feature_skipped`, so a feature that quietly stops running is visible as a
+`1` instead of vanishing from the dashboard. Consequently `run_success` means only
+"nothing failed": read it together with `feature_skipped`, never alone.
+
+`uninstall` is the one row that is asserted by the workflow *after* the push, so it
+appears in `results/summary.json` but not in SigNoz.
+
+**Dry-run behaviour (local runs and forks).** The push happens only when
+`OTEL_INGEST_URL`, `OTEL_INGEST_USER` and `OTEL_INGEST_PASSWORD` are all set and
+non-empty. Otherwise the runner prints one INFO line, leaves `results/summary.json`
+as the complete result, and exits 0 — so `npm run systemtest` on a laptop or in a
+fork (where secrets are not exposed) behaves exactly as it did before.
+
+**A failed push fails the job.** Red features never fail the runner, but a push that
+fails — bad credentials, ingest down, or a `200` whose body reports rejected data
+points — exits non-zero with a `::error::` annotation, after three attempts. A
+reporting path that breaks silently would leave the dashboard stale with nobody
+noticing, which is the failure mode this reporting exists to prevent. The summary is
+written before the push, so the results artifact survives a failed push intact.
 
 ## Documentation
 
