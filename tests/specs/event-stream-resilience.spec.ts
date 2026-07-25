@@ -32,7 +32,7 @@ import { describeProbe, gameServerContainerName, probeServerContainer } from '@h
  *
  * A game server is DELETED while its container still runs. `deleteGameServerById` stops
  * and removes the container and only THEN deletes the row, so the container's `die` event
- * races the row's disappearance — and the released `DockerEventHandler` handles that event
+ * races the row's disappearance — and the pre-fix `DockerEventHandler` handled that event
  * on the docker-java callback thread with no isolation whatsoever. Three separate points
  * of the handler throw once the row is gone:
  *
@@ -53,9 +53,11 @@ import { describeProbe, gameServerContainerName, probeServerContainer } from '@h
  *
  * THE HYPOTHESIS THIS SPEC REPLACES — the previous version of this file idled for 90 s on
  * the theory that the backend's 45 s `responseTimeout` tears down a quiet `/events`
- * stream. **That theory is DISPROVEN:** a control run of the idle spec against the OLD,
- * buggy backend (`sha-e200a4d`) PASSED — 90 s of silence does not kill the stream. A guard
- * that passes on the buggy build guards nothing, so the idle machinery is gone.
+ * stream. **That theory did not explain the observed wedge:** a control run of the idle
+ * spec against the pre-fix v1.0.3 backend (`sha-e200a4d`) PASSED — 90 s of silence did not
+ * kill the stream. A guard that passes on the buggy build guards nothing, so the idle
+ * machinery is gone. (The read timeout on long-lived streams was nonetheless real and was
+ * also corrected by #119; it simply was not what wedged run 18.)
  *
  * THE MECHANISM, in three moves:
  *
@@ -88,12 +90,20 @@ import { describeProbe, gameServerContainerName, probeServerContainer } from '@h
  * ISOLATION. The spec provisions its OWN throwaway servers (Phase-2 convention) and never
  * touches the shared ones, so no other spec's server can be deleted or stopped by it.
  *
+ * STATUS: expected GREEN since v1.1.0, which ships the fix (Cosy-Backend #119). The
+ * handler now isolates each listener in its own try/catch, so a throw on one event can no
+ * longer escape `onNext`, and a stream that does end is reconnected with backoff on a
+ * dedicated thread followed by a reconciliation pass. A failure here is therefore a
+ * REGRESSION of that fix, not the known bug.
+ *
  * SIDE EFFECT, deliberately accepted: against a backend that still has the bug, this spec
  * *causes* the wedge rather than waiting to stumble into it, so the specs that run after it
  * will also fail — fast (≈45 s each) and with the same named diagnosis, thanks to
  * `helpers/docker.ts`. That is the honest reading of a broken build: the first red row
- * names the root cause instead of four later rows reporting mystery timeouts. To skip it
- * for a run: `npx playwright test --grep-invert event-stream-resilience`.
+ * names the root cause instead of four later rows reporting mystery timeouts. This is why
+ * the spec is kept as-is rather than retired now that the bug is fixed — it is the guard
+ * that keeps it fixed. To skip it for a run:
+ * `npx playwright test --grep-invert event-stream-resilience`.
  */
 test.describe('@extended event-stream-resilience', () => {
   runsOnlyWithInstall();
@@ -245,9 +255,11 @@ function deleteWhileRunningFailure(
     `  Mechanism: the deleted servers' containers emit "die" AFTER their rows are removed, so ` +
     `DockerEventHandler handles an event for a server that no longer exists — the status ` +
     `supplier 404s, or updateStatus writes 0 rows (ObjectOptimisticLockingFailureException). ` +
-    `The released handler lets that exception escape onNext, which ENDS the /events ` +
-    `subscription; onError only logs it and nothing reconnects, so the backend is blind from ` +
-    `then on.\n` +
+    `If that exception escapes onNext it ENDS the /events subscription and the backend is ` +
+    `blind from then on. Cosy-Backend #119 (shipped in v1.1.0) isolates each listener in its ` +
+    `own try/catch and reconnects with backoff, so seeing this message on v1.1.0 or later ` +
+    `means that fix has REGRESSED — check DockerEventHandler.notifyListeners and the ` +
+    `docker-event-reconnect thread first.\n` +
     `  The control server reached RUNNING moments earlier, so the stream was alive before the ` +
     `deletes and only they are new.\n` +
     `  Control container really transitioned: ${smokingGun}.\n` +

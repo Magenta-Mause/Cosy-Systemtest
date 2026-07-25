@@ -10,7 +10,7 @@ import {
  * Feature: server-create — create a server with a custom image through the UI
  * creation wizard and get it to RUNNING.
  *
- * In the released frontend (5dba6e8) a freshly created server is STOPPED ("ready
+ * In the released frontend (2659b07) a freshly created server is STOPPED ("ready
  * to be started"), so after the wizard we start it through the UI and assert the
  * live status reaches RUNNING — the full "user creates and runs a server" path.
  *

@@ -1,16 +1,40 @@
 
 
-> **Status 2026-07-24:** all ids below were implemented in [Cosy-Frontend PR #118](https://github.com/Magenta-Mause/Cosy-Frontend/pull/118)
-> (three renames noted inline). Page objects stay on role/label selectors until a release
-> ships the ids; then switch to `getByTestId` and clear this list.
 # `data-testid` gaps
 
-The Cosy frontend currently ships **zero `data-testid` attributes** (verified:
-`grep -r data-testid Cosy-Frontend/src` → 0 hits). Every selector in this suite
-therefore falls back to accessible role / label / text selectors, each marked with
-a `// TODO(testid)` comment in the page object. This file is the backlog of ids to
-add in `Cosy-Frontend` — each becomes a small frontend PR, after which the matching
-page object should switch to `getByTestId(...)`.
+> **Status: v1.1.0.** [Cosy-Frontend PR #118](https://github.com/Magenta-Mause/Cosy-Frontend/pull/118)
+> shipped in this release, so its ids now exist in the deployed UI and the page objects
+> use them. **Only Phase 1 of the request was implemented** — the Phase 2 ids were not,
+> so those sites still use accessible role/label selectors marked `// TODO(testid)`.
+
+**Delivered in v1.1.0 and now consumed by the suite:** `login-open-btn`,
+`login-username-input`, `login-password-input`, `login-submit-btn`, `options-banner`,
+`logout-btn`, `logout-confirm-btn`, `create-server-plot`, `server-house`,
+`create-server-next-btn`, `create-field-{server_name,docker_image_name,docker_image_tag,execution_command,docker_max_memory}`,
+`create-confirm-btn`, `create-success-open-dashboard-btn`, `server-tab-{overview,console,metrics,file_explorer,settings}`,
+`server-start-stop-btn`, `server-status-indicator`, `server-delete-btn`,
+`delete-confirm-input`, `delete-confirm-btn`, `console-log-list`,
+`console-command-input`, `console-send-btn`, `files-new-folder-btn`, `file-row`,
+`file-row-menu-btn`, `mkdir-name-input`, `mkdir-submit-btn`, `rename-name-input`,
+`rename-submit-btn`, `delete-submit-btn`.
+
+**Three landed under different names than requested** — the tables below still show the
+original proposals:
+
+| Requested | Shipped as | Consequence for the page object |
+|---|---|---|
+| `server-house-{uuid}` | `server-house` (static) | must still be narrowed by the house's aria-label |
+| `file-row-name` | `file-row` (whole row, static) | narrowed with `has:` an exact-text child, not `hasText:` (substring) |
+| `file-row-rename-btn` / `file-row-delete-btn` | `file-row-menu-btn` | the inline per-action buttons no longer exist; open the dropdown, then pick a `role=menuitem` |
+
+**Still missing — this is the live backlog.** All of Phase 2 (users/invites, settings,
+metrics, access groups, public dashboard), plus `create-volume-mount-input`,
+`memory-unit-select`, `game-option-{slug}`, `template-option-{…}`, `files-upload-btn`,
+`files-download-dir-btn`, and testids on the row dropdown's menu items.
+
+**New surface with no ids and no coverage yet** (added in v1.1.0): the file editor
+(`editfile-textarea` / `editfile-save-btn` DO exist), Change Permissions, Upload Archive
+and Download Directory. A file-edit spec is now feasible and would be worth adding.
 
 Paths are relative to the `Cosy-Frontend` repo. "Current selector" is what the page
 object uses today.
@@ -34,7 +58,7 @@ object uses today.
 | `create-server-plot` | `src/components/display/GameServer/ConstructionPlace/ConstructionPlaceHouse.tsx` | `getByRole('link', { name: 'Create a new Game Server Configuration' })` |
 | `server-house` (static; filter by content — was proposed as `server-house-{uuid}`) | `src/components/display/GameServer/GameServerHouseAligner/…` (server house link) | `getByRole('link', { name: /Game Server Configuration: {name}/ })` — the suite prefers URL navigation (`/server/{uuid}`) instead |
 
-## Create-server wizard (released revision 5dba6e8)
+## Create-server wizard (released revision 2659b07)
 
 | Suggested `data-testid` | Frontend file | Current selector |
 |---|---|---|
@@ -66,7 +90,7 @@ object uses today.
 | `console-command-input` | `src/components/display/LogDisplay/LogDisplay.tsx` | `getByPlaceholder('Enter command...')` |
 | `console-send-btn` | `src/components/display/LogDisplay/LogDisplay.tsx` | not selected directly — commands are submitted via Enter |
 
-## Files (released revision 5dba6e8)
+## Files (released revision 2659b07)
 
 | Suggested `data-testid` | Frontend file | Current selector |
 |---|---|---|

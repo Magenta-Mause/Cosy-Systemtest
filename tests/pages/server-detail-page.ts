@@ -22,9 +22,15 @@ export const STATUS_LABEL = {
  * control, the live status indicator (fed by the WebSocket store), tab navigation,
  * and the delete flow (under Settings → General → Uncosy Zone).
  *
- * Tab switching navigates by URL: the fancy nav buttons keep their text label
- * visually hidden until hover and expose no test id, so URL navigation is the
- * robust option here (see docs/testid-gaps.md).
+ * Tab switching navigates by URL. v1.1.0 added `server-tab-<key>` testids
+ * (overview / console / metrics / file_explorer / settings) so real tab clicks are
+ * now possible, but URL navigation is kept: it is what the specs actually need and
+ * it does not depend on the nav rail being rendered at the current viewport.
+ *
+ * BUTTON LABELS ARE NOT STABLE MID-ACTION (v1.1.0): a loading Button replaces its
+ * children with a loading label, so start/stop reads "Starting" / "Stopping..."
+ * while the request is in flight. Controls are therefore addressed by testid and the
+ * label is asserted separately, as a state check rather than as a selector.
  */
 export class ServerDetailPage {
   constructor(private readonly page: Page, private readonly uuid: string) {}
@@ -45,20 +51,26 @@ export class ServerDetailPage {
     await this.page.goto(`/server/${this.uuid}/settings/general`);
   }
 
-  // Start/stop button — label is "Start" when stopped, "Shutdown" when running.
-  // TODO(testid): add data-testid="server-start-stop-btn" to GameServerStartStopButton
-  private get startButton(): Locator {
-    return this.page.getByRole('button', { name: 'Start', exact: true });
-  }
-
-  private get stopButton(): Locator {
-    return this.page.getByRole('button', { name: 'Shutdown', exact: true });
-  }
-
-  /** The start/stop control regardless of its current label ("Start" | "Shutdown"). */
+  /** The single start/stop control, whatever its current label. */
   private get startStopButton(): Locator {
-    // TODO(testid): add data-testid="server-start-stop-btn" to GameServerStartStopButton
-    return this.page.getByRole('button', { name: /^(Start|Shutdown)$/ });
+    return this.page.getByTestId('server-start-stop-btn');
+  }
+
+  /**
+   * Click the start/stop control, first asserting it currently offers `expected`
+   * ("Start" when stopped, "Shutdown" when running). Asserting the label before
+   * clicking keeps the old selector's safety — it fails loudly if the server is not
+   * in the state the caller assumed — without breaking when the label flips to
+   * "Starting" / "Stopping..." on click.
+   */
+  private async clickStartStop(expected: 'Start' | 'Shutdown'): Promise<void> {
+    const btn = this.startStopButton;
+    await expect(
+      btn,
+      `start/stop control did not read "${expected}" — the server is not in the state ` +
+        `this action assumed`,
+    ).toHaveText(expected, { timeout: UI_ACTION_TIMEOUT_MS });
+    await btn.click();
   }
 
   /**
@@ -72,10 +84,10 @@ export class ServerDetailPage {
    */
   async expectStatus(status: keyof typeof STATUS_LABEL, timeout = WS_MESSAGE_TIMEOUT_MS): Promise<void> {
     try {
-      // TODO(testid): add data-testid="server-status-indicator" to GameServerStatusIndicator
-      await expect(this.page.getByText(STATUS_LABEL[status], { exact: false }).first()).toBeVisible({
-        timeout,
-      });
+      await expect(this.page.getByTestId('server-status-indicator')).toContainText(
+        STATUS_LABEL[status],
+        { timeout },
+      );
     } catch (err) {
       if (status === 'RUNNING' || status === 'STOPPED') {
         const wedge = detectUiStatusWedge(this.uuid, status);
@@ -98,11 +110,11 @@ export class ServerDetailPage {
   }
 
   async start(): Promise<void> {
-    await this.startButton.click();
+    await this.clickStartStop('Start');
   }
 
   async stop(): Promise<void> {
-    await this.stopButton.click();
+    await this.clickStartStop('Shutdown');
   }
 
   /** Click start and wait until the live indicator reports RUNNING. */
@@ -123,15 +135,13 @@ export class ServerDetailPage {
    */
   async deleteViaUi(serverName: string): Promise<void> {
     await this.gotoGeneralSettings();
-    // TODO(testid): add data-testid="server-delete-btn" to UncosyZone delete Button
-    await this.page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await this.page.getByTestId('server-delete-btn').click();
 
     const dialog = this.page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    // Confirmation requires typing the exact server name (id="serverName").
-    // TODO(testid): add data-testid="delete-confirm-input" to DeleteGameServerAlertDialog input
-    await dialog.locator('#serverName').fill(serverName);
-    await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
+    // Confirmation requires typing the exact server name.
+    await dialog.getByTestId('delete-confirm-input').fill(serverName);
+    await dialog.getByTestId('delete-confirm-btn').click();
 
     // On success the app redirects to home with ?deleted=true.
     await this.page.waitForURL(/\/(\?.*)?$/, { timeout: UI_ACTION_TIMEOUT_MS });

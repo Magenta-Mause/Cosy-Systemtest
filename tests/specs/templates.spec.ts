@@ -19,13 +19,12 @@ import { CreateServerPage, HomePage } from '@pages/index';
  * catalog display names ("Counter-Strike 2", "ARK: Survival Evolved"). The
  * "catalog loads" proof is that Minecraft's templates render.
  *
- * EXPECTED RED on released v1.0.3 — this spec is doing its job. Template selection is
- * genuinely broken in the release: Step2 compares the template's STRING `game_id`
- * ("minecraft") against the NUMERIC `external_game_id` from the games API, so no
- * template ever matches and step 2 always says "No templates are available". Fixed on
- * frontend main, unreleased. Do NOT weaken or skip this spec — it goes green by itself
- * once a release ships the fix. Full chain + evidence: docs/KNOWN-ISSUES.md
- * ("CONFIRMED PRODUCT BUG — catalog template selection").
+ * Expected GREEN since v1.1.0. This spec was a documented red for the whole v1.0.3
+ * line: Step2 compared the template's STRING `game_id` ("minecraft") against the
+ * NUMERIC `external_game_id` from the games API, so no template ever matched and step
+ * 2 always said "No templates are available". The release ships the fix, so a failure
+ * here is now a REGRESSION, not the known bug. History: docs/KNOWN-ISSUES.md
+ * ("catalog template selection", resolved).
  */
 test.describe('@extended templates', () => {
   runsOnlyWithInstall();

@@ -1,7 +1,7 @@
 {
   "uuid": "019f8a41-7c30-7b52-9c04-6c0a1f2ee901",
   "title": "Cosy Systemtest",
-  "description": "End-to-end systemtest: a fresh GitHub runner installs Cosy from scratch via install_cosy.sh and drives 20 features through the real UI. Nightly 02:30 UTC.\n\n⚠️ 2 reds and 1 skip are EXPECTED: templates + server-from-template fail on a confirmed bug in the released product; rcon is quarantined. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md\n\nChannels: release = the installer as published · staging = freshly pushed images.\nEach run also emits a trace — open it from the \"Runs in window\" table.",
+  "description": "End-to-end systemtest: a fresh GitHub runner installs Cosy from scratch via install_cosy.sh and drives 20 features through the real UI. Nightly 02:30 UTC.\n\n⚠️ 1 skip is EXPECTED: rcon is quarantined. Every red is a real regression — the v1.0.3 template bug was fixed in v1.1.0 and its exclusions were removed. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md\n\nChannels: release = the installer as published · staging = freshly pushed images.\nEach run also emits a trace — open it from the \"Runs in window\" table.",
   "tags": [
     "cosy",
     "systemtest",
@@ -289,22 +289,11 @@
     },
     {
       "h": 3,
-      "i": "v-known-red",
-      "moved": false,
-      "static": false,
-      "w": 6,
-      "x": 0,
-      "y": 46,
-      "minW": 2,
-      "minH": 2
-    },
-    {
-      "h": 3,
       "i": "v-known-skip",
       "moved": false,
       "static": false,
-      "w": 6,
-      "x": 6,
+      "w": 12,
+      "x": 0,
       "y": 46,
       "minW": 2,
       "minH": 2
@@ -314,7 +303,7 @@
     {
       "id": "row-release-now",
       "title": "Release channel — current state",
-      "description": "What the published product looks like right now. EXPECTED REDS: `templates` and `server-from-template` fail on a confirmed bug in the RELEASED product (v1.0.3 strict-compares a string template game_id against a numeric games-API id, so the wizard never lists a template). EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "description": "What the published product looks like right now. EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
       "panelTypes": "row",
       "contextLinks": {
         "linksData": []
@@ -475,7 +464,7 @@
     {
       "id": "v-rel-fail",
       "title": "Failing (release)",
-      "description": "Features that failed in the most recent release run. Two of these are EXPECTED — see the 'Unexpected failures' tile next to it, which is the one to react to. EXPECTED REDS: `templates` and `server-from-template` fail on a confirmed bug in the RELEASED product (v1.0.3 strict-compares a string template game_id against a numeric games-API id, so the wizard never lists a template). EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "description": "Features that failed in the most recent release run. Two of these are EXPECTED — see the 'Unexpected failures' tile next to it, which is the one to react to. EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
       "panelTypes": "value",
       "query": {
         "id": "v-rel-fail-q",
@@ -594,7 +583,7 @@
     {
       "id": "v-rel-unexpected",
       "title": "Unexpected failures (release)",
-      "description": "Failing features EXCLUDING the two that fail on the documented released-product bug (templates, server-from-template). This is the tile that means 'something new broke'; red here is a real regression. When the fix ships, drop the exclusion from this panel and from the CosySystemtestFeatureFailing alert rule — the CosySystemtestKnownBugFixed rule mails a reminder. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "description": "Failing features in the most recent release run. Red here is a real regression: there are no known-bug exclusions any more — the v1.0.3 create-wizard bug that used to exclude `templates` and `server-from-template` was fixed in v1.1.0, and the exclusion was dropped from this panel and from the CosySystemtestFeatureFailing alert rule together with the CosySystemtestKnownBugFixed reminder rule. `rcon` needs no exclusion here — a skipped feature reports no status sample at all. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
       "panelTypes": "value",
       "query": {
         "id": "v-rel-unexpected-q",
@@ -602,7 +591,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\",feature!~\"templates|server-from-template\"}[26h]) == 0) or vector(0)",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h]) == 0) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -1112,7 +1101,7 @@
     {
       "id": "g-rel-red",
       "title": "Failing features over time (release)",
-      "description": "Stacked band per FAILING feature — the stack height is how many features are red and each band shows exactly when that feature broke and when it recovered. Passing features are filtered out, so the legend only ever names what is actually broken. The two permanent bands are the documented product bug. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "description": "Stacked band per FAILING feature — the stack height is how many features are red and each band shows exactly when that feature broke and when it recovered. Passing features are filtered out, so the legend only ever names what is actually broken. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
       "panelTypes": "graph",
       "query": {
         "id": "g-rel-red-q",
@@ -2622,7 +2611,7 @@
     {
       "id": "g-stg-red",
       "title": "Failing features over time (staging)",
-      "description": "Same stacked-band view as the release matrix, for the pre-release build. A band that exists here but not on release = the next version regresses that feature. A band that exists on release but not here = the next version fixes it.",
+      "description": "Features that failed in the most recent staging run. Staging installs a pre-release image pair (sha-<short>) via the workflow's backend_tag / frontend_tag inputs, so a red here is a heads-up about the NEXT release rather than an incident in the published one.",
       "panelTypes": "graph",
       "query": {
         "id": "g-stg-red-q",
@@ -2730,8 +2719,8 @@
     },
     {
       "id": "row-known",
-      "title": "Known expected reds & skips — read this before triaging",
-      "description": "EXPECTED REDS: `templates` and `server-from-template` fail on a confirmed bug in the RELEASED product (v1.0.3 strict-compares a string template game_id against a numeric games-API id, so the wizard never lists a template). EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "title": "Known expected skips — read this before triaging",
+      "description": "EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. There are no expected reds — any red is a regression. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
       "panelTypes": "row",
       "contextLinks": {
         "linksData": []
@@ -2779,115 +2768,6 @@
       ],
       "softMax": null,
       "softMin": null
-    },
-    {
-      "id": "v-known-red",
-      "title": "Known product-bug reds (expected 2)",
-      "description": "`templates` and `server-from-template` are RED on purpose: released v1.0.3 compares a string template `game_id` against the numeric `external_game_id` from the games API, so the create wizard always reports 'No templates are available for this game'. Fixed on frontend main, unreleased. The specs are deliberately NOT skipped — they are detecting a genuine broken feature, and will go green on their own when a release ships the fix. Expected value: 2. If this reads 0, the fix has shipped: remove the feature!~\"templates|server-from-template\" exclusion from the 'Unexpected failures' tile and from the CosySystemtestFeatureFailing alert. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
-      "panelTypes": "value",
-      "query": {
-        "id": "v-known-red-q",
-        "queryType": "promql",
-        "promql": [
-          {
-            "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\",feature=~\"templates|server-from-template\"}[26h]) == 0) or vector(0)",
-            "legend": "",
-            "disabled": false
-          }
-        ],
-        "builder": {
-          "queryData": [
-            {
-              "dataSource": "metrics",
-              "disabled": false,
-              "expression": "A",
-              "filters": {
-                "items": [],
-                "op": "AND"
-              },
-              "groupBy": [],
-              "having": [],
-              "legend": "",
-              "limit": null,
-              "orderBy": [],
-              "queryName": "A",
-              "stepInterval": 60,
-              "aggregations": [
-                {
-                  "metricName": "",
-                  "temporality": null,
-                  "timeAggregation": "avg",
-                  "spaceAggregation": "avg",
-                  "reduceTo": "sum"
-                }
-              ]
-            }
-          ],
-          "queryFormulas": []
-        },
-        "clickhouse_sql": [
-          {
-            "name": "A",
-            "legend": "",
-            "disabled": false,
-            "query": ""
-          }
-        ]
-      },
-      "yAxisUnit": "none",
-      "thresholds": [],
-      "isStacked": false,
-      "fillSpans": false,
-      "nullZeroValues": "empty",
-      "opacity": "1",
-      "isLogScale": false,
-      "mergeAllActiveQueries": false,
-      "softMin": 0,
-      "softMax": 0,
-      "legendPosition": "bottom",
-      "columnUnits": {},
-      "customLegendColors": {},
-      "bucketCount": 30,
-      "bucketWidth": 0,
-      "decimalPrecision": 0,
-      "timePreferance": "GLOBAL_TIME",
-      "contextLinks": {
-        "linksData": []
-      },
-      "selectedLogFields": [
-        {
-          "fieldContext": "log",
-          "name": "timestamp",
-          "signal": "logs",
-          "type": "log"
-        },
-        {
-          "fieldContext": "log",
-          "name": "body",
-          "signal": "logs",
-          "type": "log"
-        }
-      ],
-      "selectedTracesFields": [
-        {
-          "fieldContext": "resource",
-          "fieldDataType": "string",
-          "name": "service.name",
-          "signal": "traces"
-        },
-        {
-          "fieldContext": "span",
-          "fieldDataType": "string",
-          "name": "name",
-          "signal": "traces"
-        },
-        {
-          "fieldContext": "span",
-          "name": "duration_nano",
-          "signal": "traces"
-        }
-      ]
     },
     {
       "id": "v-known-skip",

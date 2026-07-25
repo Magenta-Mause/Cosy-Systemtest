@@ -3,7 +3,8 @@ import { expect } from '@playwright/test';
 import { UI_ACTION_TIMEOUT_MS } from '@helpers/constants';
 
 /**
- * The file browser, derived from the RELEASED frontend (revision 5dba6e8).
+ * The file browser, derived from the RELEASED frontend (revision 2659b07, the image
+ * pinned by installer v1.1.0).
  *
  * Important release behaviour: the file browser only exposes files inside a
  * server's declared *volume mounts*. The synthetic root (`/`) and any path not
@@ -11,9 +12,19 @@ import { UI_ACTION_TIMEOUT_MS } from '@helpers/constants';
  * there (`isSynthetic` gates them). So real file operations are only possible
  * INSIDE a volume mount; deep-link straight into one via `goto(uuid, 'data')`.
  *
- * Row actions are inline buttons with aria-labels `Rename <name>` / `Delete <name>`;
- * the "New Directory" button opens the mkdir dialog. There is NO file-edit in this
- * release. No `data-testid`s exist — see docs/testid-gaps.md.
+ * Since v1.1.0 write actions ALSO require the CHANGE_SERVER_FILES permission
+ * (`canWrite` in FileBrowserList); download needs only READ_SERVER_FILES. The admin
+ * the suite logs in as has both.
+ *
+ * ROW ACTIONS MOVED IN v1.1.0. They used to be inline icon buttons with aria-labels
+ * "Rename <name>" / "Delete <name>"; they are now items inside a per-row dropdown
+ * opened by the row's "More actions" trigger (`file-row-menu-btn`). The old inline
+ * buttons do not exist any more, so the old selectors did not merely go stale — they
+ * stopped matching anything at all.
+ *
+ * v1.1.0 also added file editing (EditFileModal, testids `editfile-textarea` /
+ * `editfile-save-btn`), Change Permissions, Upload Archive and Download Directory.
+ * None of those are covered by a spec yet — see docs/testid-gaps.md.
  */
 export class FilesPage {
   constructor(private readonly page: Page) {}
@@ -29,8 +40,7 @@ export class FilesPage {
 
   private get newFolderButton(): Locator {
     // fileBrowserHeader.newFolder = "New Directory" (only rendered on a non-synthetic path).
-    // TODO(testid): add data-testid="files-new-folder-btn" to FileBrowserHeader button
-    return this.page.getByRole('button', { name: 'New Directory' });
+    return this.page.getByTestId('files-new-folder-btn');
   }
 
   /**
@@ -51,12 +61,17 @@ export class FilesPage {
     ).toHaveValue(value, { timeout: UI_ACTION_TIMEOUT_MS });
   }
 
-  /** The visible name cell of a file/directory row. */
+  /**
+   * A file/directory row, identified by its name cell.
+   *
+   * `data-testid="file-row"` is STATIC (one per row, not per name), so it has to be
+   * narrowed. `has:` an exact-text child rather than `hasText:` — the latter is a
+   * substring match, so a row named "data" would also match "data-backup".
+   */
   private entry(name: string): Locator {
-    // The filename renders in its own text node; the row's action buttons carry the
-    // name only in aria-labels, so an exact text match hits just the name cell.
-    // TODO(testid): add data-testid={`file-row-${name}`} to FileBrowserRow
-    return this.page.getByText(name, { exact: true });
+    return this.page
+      .getByTestId('file-row')
+      .filter({ has: this.page.getByText(name, { exact: true }) });
   }
 
   async expectEntryVisible(name: string): Promise<void> {
@@ -72,43 +87,48 @@ export class FilesPage {
     await this.newFolderButton.click();
     const dialog = this.page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await this.typeInto(dialog.getByRole('textbox'), name, 'new folder name');
-    // MkdirDialog submit label is "Create" (createAction).
-    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    await this.typeInto(dialog.getByTestId('mkdir-name-input'), name, 'new folder name');
+    await dialog.getByTestId('mkdir-submit-btn').click();
     await expect(dialog).toBeHidden({ timeout: UI_ACTION_TIMEOUT_MS });
   }
 
   async rename(name: string, newName: string): Promise<void> {
-    // The whole file row is itself a <button>, so its accessible name CONTAINS the
-    // child action button's aria-label ("… Rename <name> Delete <name>"). `exact:true`
-    // selects only the inline rename icon button (whose aria-label overrides its
-    // content, making its accessible name exactly "Rename <name>").
-    await this.rowActionButton('Rename', name).click();
+    await this.openRowMenu(name);
+    await this.menuItem('Rename').click();
     const dialog = this.page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await this.typeInto(dialog.getByRole('textbox'), newName, 'rename target name');
-    // Dialog is a separate subtree; scope to it + exact so the row's "Rename <name>"
-    // button can't collide with the dialog's "Rename" submit.
-    await dialog.getByRole('button', { name: 'Rename', exact: true }).click();
+    await this.typeInto(dialog.getByTestId('rename-name-input'), newName, 'rename target name');
+    await dialog.getByTestId('rename-submit-btn').click();
     await expect(dialog).toBeHidden({ timeout: UI_ACTION_TIMEOUT_MS });
   }
 
   async deleteEntry(name: string): Promise<void> {
-    await this.rowActionButton('Delete', name).click();
+    await this.openRowMenu(name);
+    await this.menuItem('Delete').click();
     const dialog = this.page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
-    await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
+    await dialog.getByTestId('delete-submit-btn').click();
     await expect(dialog).toBeHidden({ timeout: UI_ACTION_TIMEOUT_MS });
   }
 
   /**
-   * The per-row inline action icon button (aria-labelled "<action> <name>"). These
-   * are width-gated (`@[500px]:flex`), not hover-gated, so they're clickable at the
-   * default viewport without hovering. `exact:true` disambiguates from the enclosing
-   * row button whose name merely contains this label.
+   * Open a row's "More actions" dropdown, which is where rename / delete / edit /
+   * download / change-permissions live since v1.1.0. Write actions are only rendered
+   * when the path is non-synthetic AND the user holds CHANGE_SERVER_FILES, so a
+   * missing item means a permission or path problem, not a selector problem.
    */
-  private rowActionButton(action: 'Rename' | 'Delete', name: string): Locator {
-    // TODO(testid): add data-testid={`file-row-${action.toLowerCase()}-${name}`} to FileBrowserRow
-    return this.page.getByRole('button', { name: `${action} ${name}`, exact: true });
+  private async openRowMenu(name: string): Promise<void> {
+    const row = this.entry(name);
+    await expect(
+      row,
+      `file browser: no row named "${name}" to act on`,
+    ).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    await row.getByTestId('file-row-menu-btn').click();
+  }
+
+  /** An item in the currently-open row dropdown. */
+  private menuItem(action: 'Rename' | 'Delete' | 'Edit' | 'Download' | 'Export'): Locator {
+    // TODO(testid): add data-testid={`file-row-${action}`} to FileBrowserRow's menu items
+    return this.page.getByRole('menuitem', { name: action, exact: true });
   }
 }

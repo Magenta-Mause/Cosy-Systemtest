@@ -12,6 +12,12 @@ import { UI_ACTION_TIMEOUT_MS, UI_FLOW_TIMEOUT_MS } from '@helpers/constants';
  * `InputFieldEditGameServer`, which passes a `header` but no `id`, so the label is
  * NOT associated — those fields are addressed by their placeholder text (see
  * docs/testid-gaps.md).
+ *
+ * CAUTION (v1.1.0): a loading Button REPLACES its children with a loading label
+ * ("Saving..." / "Loading..."), so a label-based locator stops matching while a save
+ * is in flight. The selectors here address buttons only to CLICK them, before any
+ * request starts, which is safe. Never reuse one to wait for a save to finish —
+ * assert on the resulting state instead.
  */
 
 /** Click the shared "Confirm" save button and dismiss any warning dialog. */

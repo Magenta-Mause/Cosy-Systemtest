@@ -13,13 +13,14 @@ import { CreateServerPage, HomePage } from '@pages/index';
  * fixture (shared layers). The PaperMC template requires a `version` (no default) +
  * `memory` variable, both filled here so step 2 can advance.
  *
- * EXPECTED RED on released v1.0.3 — this spec is doing its job. Template selection is
- * genuinely broken in the release: Step2 compares the template's STRING `game_id`
- * ("minecraft") against the NUMERIC `external_game_id` from the games API, so no
- * template ever matches and step 2 always says "No templates are available". Fixed on
- * frontend main, unreleased. Do NOT weaken or skip this spec — it goes green by itself
- * once a release ships the fix. Full chain + evidence: docs/KNOWN-ISSUES.md
- * ("CONFIRMED PRODUCT BUG — catalog template selection").
+ * Expected GREEN since v1.1.0. This spec was a documented red for the whole v1.0.3
+ * line: Step2 compared the template's STRING `game_id` ("minecraft") against the
+ * NUMERIC `external_game_id` from the games API, so no template ever matched and step
+ * 2 always said "No templates are available". The release ships the fix, so a failure
+ * here is now a REGRESSION, not the known bug. History: docs/KNOWN-ISSUES.md
+ * ("catalog template selection", resolved). Note this spec only became load-bearing
+ * with v1.1.0 — before it, it never got past step 2, so its full path (template
+ * variables, image prefill) is newly exercised.
  *
  * Scope: this spec proves CREATION from a template, not the boot. It asserts the
  * template prefilled step-3's docker image and that the created server opens — it

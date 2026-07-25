@@ -1,65 +1,72 @@
 # Known issues & release behaviours (Cosy under test)
 
 Notes for whoever triages a red run: behaviours of the **released** product
-(frontend `5dba6e8`, installer v1.0.3) that shaped how the specs drive it, plus a
+(frontend `2659b07`, installer v1.1.0) that shaped how the specs drive it, plus a
 rare crash the suite guards against. These are not test bugs to "fix" here.
 
 ## Expected state of the dashboard (as of 2026-07-25)
 
-The **"Cosy Systemtest"** SigNoz dashboard is *supposed* to show two reds and one skip.
-Of 20 features: **17 pass, 2 fail, 1 is skipped.**
+The **"Cosy Systemtest"** SigNoz dashboard is *supposed* to show one skip and no reds.
+Of 20 features: **19 pass, 1 is skipped.**
 
 | Feature | State | Why | Fixed by |
 |---|---|---|---|
-| `templates` | RED | [Catalog template selection is broken in released v1.0.3](#confirmed-product-bug--catalog-template-selection-is-broken-in-released-v103) — string vs numeric `game_id` | already on frontend `main`, awaiting a release |
-| `server-from-template` | RED | same bug — the wizard never lists a template to build from | same |
 | `rcon` | SKIP | [Quarantined behind `SYSTEMTEST_HEAVY`](#rcon-is-quarantined-on-ci-minecraft-never-boots-on-a-github-hosted-runner) — Minecraft never boots within budget on a 4-vCPU GitHub runner | a lighter RCON-capable image, or a larger runner |
 
-These are **not** suppressed or skipped to keep the dashboard green — they are detecting
-genuine broken/unverified behaviour and will resolve on their own. What they *are*
-excluded from is paging: `CosySystemtestFeatureFailing` skips the two reds and
-`CosySystemtestFeatureNotRunning` skips `rcon`, because a rule that fires every night
-forever gets muted and then misses the real thing. The dashboard's **"Unexpected
-failures (release)"** tile applies the same exclusion and is the tile to react to;
-**"Known product-bug reds (expected 2)"** and **"Intentional skips (expected 1: rcon)"**
-show the excluded ones explicitly so the exclusions stay visible.
+`rcon` is **not** skipped to keep the dashboard green — it is unverified behaviour, and
+it is reported as skipped rather than passing (`cosy_platform_systemtest_feature_skipped`)
+precisely so that stays visible. What it is excluded from is paging:
+`CosySystemtestFeatureNotRunning` skips it, because a rule that fires every night forever
+gets muted and then misses the real thing. **"Intentional skips (expected 1: rcon)"** on
+the dashboard shows it explicitly so the exclusion stays visible.
 
-**When a release fixes the template bug** (the `CosySystemtestKnownBugFixed` alert mails
-you when those two features go green for two consecutive runs): remove the
-`feature!~"templates|server-from-template"` exclusion from the alert rule
-(`cluster-deployment/infrastructure/signoz-alerts/rule-CosySystemtestFeatureFailing.json`)
+**Every red is now a regression.** Through the whole v1.0.3 line `templates` and
+`server-from-template` were expected reds — the create wizard compared a string template
+`game_id` against a numeric games-API id, so no template was ever listed. **v1.1.0
+shipped the fix.** Their exclusion was removed from
+`cluster-deployment/infrastructure/signoz-alerts/rule-CosySystemtestFeatureFailing.json`
 and from the "Unexpected failures (release)" panel in
-[signoz-dashboard.json](signoz-dashboard.json), update the table above, and delete the
-`CosySystemtestKnownBugFixed` rule.
+[signoz-dashboard.json](signoz-dashboard.json), and the `CosySystemtestKnownBugFixed`
+reminder rule that existed to prompt exactly that removal was deleted. The historical
+detail is kept below under [catalog template selection](#resolved-in-v110--catalog-template-selection-was-broken-in-v103).
 
-## create wizard — step 1 REQUIRES selecting a game (verified)
+If you ever add an exclusion back, add a `KnownBugFixed`-style rule with it in the same
+commit: an exclusion with no expiry condition is a blind spot nobody goes looking for.
 
-Filling only the server name does **not** enable "Next Step". Step 1 registers two
-fields in the page-validity gate — `server_name` **and** `external_game_id` (the game
-autocomplete) — and `GenericGameServerCreationPage` enables the advance button only
-when *every* registered attribute is both touched **and** valid.
+## create wizard — the steps were RESHUFFLED in v1.1.0 (verified)
 
-`AutoCompleteInputField/useAutoComplete.ts` sets
-`setAttributeTouched('external_game_id', gameServerState['external_game_id'] !== undefined)`,
-so until a game is **selected** the field is `touched=false` and the whole step stays
-invalid → "Next Step" is disabled forever.
+The wizard is still three steps, but they hold different things than they did in the
+v1.0.3 line, and anything written against the old order silently drives the wrong page.
 
-The wizard's intended escape hatch: Step 1 passes `alwaysIncludeFallback` +
-`fallbackValue={GENERIC_GAME_PLACEHOLDER_VALUE}` + `defaultOpen`, so the game popover
-opens on focus and **always** contains a generic **"Generic Game"** fallback item
-(rendered client-side by `AutoCompleteItemList`, present even when the hosted games
-API is down or returns nothing). Selecting it sets `external_game_id` to the generic
-value → touched + valid (validator is `() => true`) → "Next Step" enables.
+| Step | v1.0.3 | v1.1.0 |
+|---|---|---|
+| 1 "Choose a Game & Template" | server name + game autocomplete | game **sidebar** + template **browser** |
+| 2 "Choose Template" | the template list | **server name** + the template's variables |
+| 3 "Configure your Server" | docker image, RAM, volumes | unchanged (plus an "Advanced settings" collapsible) |
 
-**How the suite handles it:** `create-server-page.ts` selects the generic fallback
-after typing the name. It's chosen over a real game because it is offline-safe *and*
-selects no template, so step 3's Docker image stays empty/editable — a clean path to
-the custom `halftheopposite/tosios` image the spec creates.
+Consequences that bit the page objects:
 
-**Verified locally** (released app dialog, mocked auth, games API returning `[]`):
-Next Step is disabled after the name alone (`enabledAfterNameOnly=false`), the
-"Generic Game" fallback appears and is selectable with the games API empty, and after
-selecting it Next Step enables and advancing reaches step 2 — no crash.
+- **Templates no longer require advancing.** They sit on step 1 next to the game
+  sidebar, so `expectTemplateOptionsPresent()` asserts in place instead of clicking
+  "Next Step" first.
+- **Step 1 is always valid** (`Step1.tsx` returns `true`), so the advance button is
+  enabled immediately. The old "selecting a game is REQUIRED to advance" rule is gone —
+  there is no `external_game_id` autocomplete any more, and no
+  `AutoCompleteInputField` component at all.
+- **Clicking a template card advances by itself** (`handleTemplateSelected` calls
+  `setCurrentPage(1)`), so the template path must NOT also click Next.
+- **The generic escape hatch was renamed**: the always-present first sidebar entry is
+  **"Generic Server"**, not "Generic Game". It is still rendered client-side, so it
+  works with the hosted games API down or empty, and it still applies no template —
+  which is why the suite uses it for the custom-image path (step 3's Docker image stays
+  empty and editable for `halftheopposite/tosios`).
+- **The step-2 label still reads "Choose Template"** even though that page now holds
+  the server name. That is stale copy in the product, not a mistake in the tests.
+- Going **Back** from step 2 clears the selected template (`clearTemplate`).
+
+The advance button carries `data-testid="create-server-next-btn"` and its label varies
+by step ("Continue without Template" / "Apply Template" / "Create Server"), so the page
+object addresses it by testid and asserts the label separately as a state check.
 
 ## Typing into controlled wizard inputs — use human-cadence keystrokes
 
@@ -129,15 +136,21 @@ supplied password), and the advertised "forced first-login change" never fires
 no frontend surfaces it). So `provisionUser` now simply **redeems with the final
 password** and the user logs in with it — no change-password call at all.
 
-### Game search list surfaces no artwork (released 5dba6e8)
+### RESOLVED in v1.1.0 — the game list now renders artwork
 
-The `games-search` spec originally asserted an `<img>` artwork element on each game
-option. The released create wizard renders game options via
-`Step1.mapGamesDtoToAutoCompleteItems` → `AutoCompleteItemList`, which only sets
-`label` (game name) + `additionalInformation` (template count) and **no `leftSlot`**,
-so the option row contains no artwork element. The spec therefore asserts a matching
-game *result* appears (proving the hosted game-service path resolves), not artwork.
-Surfacing SteamGridDB artwork in the game picker would be a frontend enhancement.
+Through v1.0.3 the `games-search` spec could not assert artwork. The wizard rendered
+game options via `Step1.mapGamesDtoToAutoCompleteItems` → `AutoCompleteItemList`, which
+set only `label` (game name) + `additionalInformation` (template count) and **no
+`leftSlot`**, so the row contained no image element at all.
+
+v1.1.0's `GameSidebar` renders `game.logo_url` as an `<img>`, falling back to a local
+console icon when the games API returns none. The spec now asserts the `<img>`, which is
+a stricter version of the same "the hosted game path really works" signal: it proves the
+API returned usable artwork, not merely that it answered.
+
+The `<img>` carries `alt=""` (it is decorative), so it is invisible to accessible-name
+matching and must be located structurally — hence `expectGameArtwork()` drilling into
+the sidebar entry rather than using a role/name locator.
 
 ### Public-dashboard layout: never send a client `uuid` (backend robustness finding)
 
@@ -245,39 +258,45 @@ GitHub-hosted runners with a documented note ("Minecraft does not reliably boot 
 budget on the 4-vCPU runner; RCON is exercised locally / needs a lighter RCON-capable
 image").
 
-## CONFIRMED PRODUCT BUG — catalog template selection is broken in released v1.0.3
+## RESOLVED in v1.1.0 — catalog template selection was broken in v1.0.3
 
-**No user can select any template in the create wizard.** Step 2 always renders
-"No templates are available for this game.", for *every* game. `templates` and
-`server-from-template` are therefore **correctly RED**: they are detecting a genuine
-broken feature, not a test defect. **Do not weaken or skip them** — they will go green
-on their own once a release ships the fix.
+Kept for history: this is what `templates` and `server-from-template` were red on for
+the entire v1.0.3 line, and it is the shape a regression would take again.
 
-**The chain (each link verified):**
+**The symptom.** No user could select any template in the create wizard. Step 2 always
+rendered "No templates are available for this game.", for *every* game.
+
+**The chain (each link was verified):**
 
 1. The hosted template service (v3) serves `game_id` as a **string slug** —
    e.g. `"minecraft"` (confirmed live against the hosted API).
 2. The backend passes it through unchanged: `ExternalTemplateDto.java:18` declares
    `@JsonProperty("game_id") String gameId` — a **String**.
 3. The games API (`cosy-game-api`, SteamGridDB proxy) is a *different* catalog and
-   yields a **numeric** id; selecting a game in step 1 stores that number as
-   `external_game_id` (e.g. `30203` for Minecraft).
-4. Released frontend `CreationSteps/Step2.tsx:22-23` filters:
+   yields a **numeric** id; selecting a game stored that number as `external_game_id`
+   (e.g. `30203` for Minecraft).
+4. Frontend `CreationSteps/Step2.tsx:22-23` filtered:
    `templates.filter((template) => template.game_id === creationState.gameServerState.external_game_id)`
 
-`"minecraft" === 30203` is a strict comparison between a String and a Number, so it is
-**always false** → `templatesForGame` is always empty → Step 2 short-circuits to its
+`"minecraft" === 30203` is a strict comparison between a String and a Number, so it was
+**always false** → `templatesForGame` was always empty → Step 2 short-circuited to its
 "no templates" branch (which renders no listbox at all).
 
-**Status: fixed on frontend `main`, unreleased.** The sentinel comment in `context.ts`
-("Sentinel game_id (string, since template game_id is now a slug-or-numeric string)")
-shows the type mismatch was addressed after 5dba6e8. This is a **released-only defect
-awaiting the next release**.
+**The fix (v1.1.0).** Matching moved into `useTemplateGames.templateMatchesGame`, which
+compares the template's `game_id` against the game's **slug** first and only falls back
+to a numeric comparison — `Number(gameId) === game.external_game_id` — when the id is
+all digits. Both sides of the comparison now have the same type in each branch.
 
-**Why the suite reports it well:** `create-server-page.ts`'s `waitForTemplateOptions()`
+**How a regression would present.** `create-server-page.ts`'s `waitForTemplateOptions()`
 polls generously and, on failure, reports that the wizard itself said no templates are
 available for the game — explicitly distinguishing a real empty catalog from a wrong
-selector, so the red row names the product bug rather than implicating the test.
+selector. Its message now also states that this *was* the v1.0.3 bug and that seeing it
+on v1.1.0+ means the fix regressed.
+
+**Unrelated but still true:** the game sidebar is populated by the games API, which is
+DISJOINT from the template catalog, so a template whose game has no games-API presence
+is still unreachable through the wizard. See "Wizard catalog templates are gated by the
+SteamGridDB games API" above.
 
 ## rcon is QUARANTINED on CI (Minecraft never boots on a GitHub-hosted runner)
 
@@ -309,7 +328,11 @@ confirm whether this is resource exhaustion rather than a product bug. (b) If it
 environmental, move RCON coverage to a **lighter RCON-capable image** so the round-trip
 is testable on a standard runner, rather than keeping a Minecraft-sized dependency.
 
-## CONFIRMED PRODUCT BUG — the backend loses its Docker event stream and never recovers
+## RESOLVED in v1.1.0 — the backend lost its Docker event stream and never recovered
+
+Kept for history and because `event-stream-resilience` is the guard that keeps it
+fixed. Everything below describes the **pre-v1.1.0** backend; the fix
+(Cosy-Backend #119, in `sha-ecc4c14`) is summarised at the end of the section.
 
 **Symptom.** Partway through a run, *every* game-server operation stops completing.
 Servers sit in **`AWAITING_UPDATE`** forever after a start, and in **`STOPPING`**
@@ -464,11 +487,20 @@ performing the sequence that actually kills the stream:
    ("a delete-while-running killed the Docker event subscription") and the container
    states of the deleted servers at the moment they were deleted.
 
-**Expected verdicts.** Against the old backend `sha-e200a4d` this spec **must FAIL** —
-that is the whole point, and the failure is the wedge diagnosis, not a timeout. Against a
-build of `fix/docker-event-stream-resilience` (per-event exception isolation + vanished
-servers handled + a self-healing subscription) it must **PASS**. The idle spec it replaced
-passed on *both*, which is why it was deleted rather than kept alongside.
+**Expected verdicts.** Against the pre-fix v1.0.3 backend (`sha-e200a4d`) this spec
+**must FAIL**, and the failure is the wedge diagnosis, not a timeout. Against v1.1.0
+(`sha-ecc4c14`) it must **PASS** — that is now the expected verdict on the release
+channel, so a red here is a regression of the fix. The idle spec it replaced passed on
+*both*, which is why it was deleted rather than kept alongside.
+
+**The fix, as shipped in v1.1.0** (`DockerEventHandler`): `notifyListeners` wraps each
+listener in its own try/catch, so a throw on one event can no longer escape `onNext` and
+end the subscription; a stream that does end is reconnected on a dedicated
+`docker-event-reconnect` thread with backoff, followed by a reconciliation pass so the
+state missed while disconnected is repaired. The 45 s `responseTimeout` — correct for
+one-shot commands, wrong for long-lived streams — was lifted for the event and log
+streams at the same time. `DockerLogStreamer` had the same footgun and got the same
+treatment.
 
 **Accepted side effect:** against a backend that still has the bug this spec *causes* the
 wedge rather than stumbling into it, so specs running after it fail too — each in ~45 s
