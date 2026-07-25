@@ -4,6 +4,34 @@ Notes for whoever triages a red run: behaviours of the **released** product
 (frontend `5dba6e8`, installer v1.0.3) that shaped how the specs drive it, plus a
 rare crash the suite guards against. These are not test bugs to "fix" here.
 
+## Expected state of the dashboard (as of 2026-07-25)
+
+The **"Cosy Systemtest"** SigNoz dashboard is *supposed* to show two reds and one skip.
+Of 20 features: **17 pass, 2 fail, 1 is skipped.**
+
+| Feature | State | Why | Fixed by |
+|---|---|---|---|
+| `templates` | RED | [Catalog template selection is broken in released v1.0.3](#confirmed-product-bug--catalog-template-selection-is-broken-in-released-v103) — string vs numeric `game_id` | already on frontend `main`, awaiting a release |
+| `server-from-template` | RED | same bug — the wizard never lists a template to build from | same |
+| `rcon` | SKIP | [Quarantined behind `SYSTEMTEST_HEAVY`](#rcon-is-quarantined-on-ci-minecraft-never-boots-on-a-github-hosted-runner) — Minecraft never boots within budget on a 4-vCPU GitHub runner | a lighter RCON-capable image, or a larger runner |
+
+These are **not** suppressed or skipped to keep the dashboard green — they are detecting
+genuine broken/unverified behaviour and will resolve on their own. What they *are*
+excluded from is paging: `CosySystemtestFeatureFailing` skips the two reds and
+`CosySystemtestFeatureNotRunning` skips `rcon`, because a rule that fires every night
+forever gets muted and then misses the real thing. The dashboard's **"Unexpected
+failures (release)"** tile applies the same exclusion and is the tile to react to;
+**"Known product-bug reds (expected 2)"** and **"Intentional skips (expected 1: rcon)"**
+show the excluded ones explicitly so the exclusions stay visible.
+
+**When a release fixes the template bug** (the `CosySystemtestKnownBugFixed` alert mails
+you when those two features go green for two consecutive runs): remove the
+`feature!~"templates|server-from-template"` exclusion from the alert rule
+(`cluster-deployment/infrastructure/signoz-alerts/rule-CosySystemtestFeatureFailing.json`)
+and from the "Unexpected failures (release)" panel in
+[signoz-dashboard.json](signoz-dashboard.json), update the table above, and delete the
+`CosySystemtestKnownBugFixed` rule.
+
 ## create wizard — step 1 REQUIRES selecting a game (verified)
 
 Filling only the server name does **not** enable "Next Step". Step 1 registers two

@@ -1,0 +1,2971 @@
+{
+  "uuid": "019f8a41-7c30-7b52-9c04-6c0a1f2ee901",
+  "title": "Cosy Systemtest",
+  "description": "End-to-end systemtest of the Cosy game-server platform: every night a GitHub-hosted runner installs Cosy from scratch with install_cosy.sh and drives 20 features through the real UI. One gauge sample per feature per run reaches SigNoz over OTLP.\n\nREAD FIRST \u2014 this dashboard is EXPECTED to show 2 reds and 1 skip. EXPECTED REDS: `templates` and `server-from-template` fail on a confirmed bug in the RELEASED product (v1.0.3 strict-compares a string template game_id against a numeric games-API id, so the wizard never lists a template). EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md\n\nChannels: `release` = the installer exactly as published (nightly 02:30 UTC + release tags); `staging` = the same suite against freshly pushed sha-<short> images.\n\nEvery query wraps its metric in last_over_time(...[26h]) because a nightly publishes one sample per day and Prometheus' 5-minute lookback would otherwise blank the whole dashboard minutes after a run. Source of truth for this JSON: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/signoz-dashboard.json\n\nNOTE (2026-07-25): the metrics were renamed to the cosy_platform_ prefix on that day. The release-channel panels stay empty until the first nightly publishes under the new names; earlier runs are still in SigNoz under cosy_systemtest_*, which now belongs exclusively to the unrelated Cosy Domain Provider systemtest \u2014 do not query it here.",
+  "tags": [
+    "cosy",
+    "systemtest",
+    "e2e",
+    "quality"
+  ],
+  "uploadedGrafana": false,
+  "variables": {},
+  "version": "v5",
+  "layout": [
+    {
+      "h": 1,
+      "i": "row-release-now",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 0,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-rel-pass",
+      "moved": false,
+      "static": false,
+      "w": 2,
+      "x": 0,
+      "y": 1,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-rel-fail",
+      "moved": false,
+      "static": false,
+      "w": 2,
+      "x": 2,
+      "y": 1,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-rel-unexpected",
+      "moved": false,
+      "static": false,
+      "w": 2,
+      "x": 4,
+      "y": 1,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-rel-skipped",
+      "moved": false,
+      "static": false,
+      "w": 2,
+      "x": 6,
+      "y": 1,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-rel-reported",
+      "moved": false,
+      "static": false,
+      "w": 2,
+      "x": 8,
+      "y": 1,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-rel-age",
+      "moved": false,
+      "static": false,
+      "w": 2,
+      "x": 10,
+      "y": 1,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 1,
+      "i": "row-matrix",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 4,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 5,
+      "i": "g-rel-red",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 5,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 6,
+      "i": "g-rel-status",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 10,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 4,
+      "i": "g-rel-skipped",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 16,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 1,
+      "i": "row-duration",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 20,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 6,
+      "i": "g-rel-duration",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 21,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-rel-total-duration",
+      "moved": false,
+      "static": false,
+      "w": 4,
+      "x": 0,
+      "y": 27,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-rel-slowest",
+      "moved": false,
+      "static": false,
+      "w": 4,
+      "x": 4,
+      "y": 27,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-rel-slow-count",
+      "moved": false,
+      "static": false,
+      "w": 4,
+      "x": 8,
+      "y": 27,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 1,
+      "i": "row-build",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 30,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 5,
+      "i": "t-runs",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 31,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 1,
+      "i": "row-staging",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 36,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-stg-pass",
+      "moved": false,
+      "static": false,
+      "w": 3,
+      "x": 0,
+      "y": 37,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-stg-fail",
+      "moved": false,
+      "static": false,
+      "w": 3,
+      "x": 3,
+      "y": 37,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-stg-skipped",
+      "moved": false,
+      "static": false,
+      "w": 3,
+      "x": 6,
+      "y": 37,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-stg-age",
+      "moved": false,
+      "static": false,
+      "w": 3,
+      "x": 9,
+      "y": 37,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 5,
+      "i": "g-stg-red",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 40,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 1,
+      "i": "row-known",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 45,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-known-red",
+      "moved": false,
+      "static": false,
+      "w": 6,
+      "x": 0,
+      "y": 46,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 3,
+      "i": "v-known-skip",
+      "moved": false,
+      "static": false,
+      "w": 6,
+      "x": 6,
+      "y": 46,
+      "minW": 2,
+      "minH": 2
+    }
+  ],
+  "widgets": [
+    {
+      "id": "row-release-now",
+      "title": "Release channel \u2014 current state",
+      "description": "What the published product looks like right now. EXPECTED REDS: `templates` and `server-from-template` fail on a confirmed bug in the RELEASED product (v1.0.3 strict-compares a string template game_id against a numeric games-API id, so the wizard never lists a template). EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "panelTypes": "row",
+      "contextLinks": {
+        "linksData": []
+      },
+      "query": {
+        "builder": {
+          "queryData": [],
+          "queryFormulas": []
+        },
+        "id": "",
+        "queryType": "builder"
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ],
+      "softMax": null,
+      "softMin": null
+    },
+    {
+      "id": "v-rel-pass",
+      "title": "Passing (release)",
+      "description": "Features that passed in the most recent release run. Verified against run 30153115819: 17 of 20 features pass.",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-rel-pass-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h]) == 1) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-rel-fail",
+      "title": "Failing (release)",
+      "description": "Features that failed in the most recent release run. Two of these are EXPECTED \u2014 see the 'Unexpected failures' tile next to it, which is the one to react to. EXPECTED REDS: `templates` and `server-from-template` fail on a confirmed bug in the RELEASED product (v1.0.3 strict-compares a string template game_id against a numeric games-API id, so the wizard never lists a template). EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-rel-fail-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h]) == 0) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [
+        {
+          "index": "t0",
+          "thresholdValue": 0,
+          "thresholdFormat": "Background",
+          "thresholdOperator": ">",
+          "thresholdColor": "#f6be00",
+          "thresholdUnit": "none",
+          "thresholdLabel": ""
+        }
+      ],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-rel-unexpected",
+      "title": "Unexpected failures (release)",
+      "description": "Failing features EXCLUDING the two that fail on the documented released-product bug (templates, server-from-template). This is the tile that means 'something new broke'; red here is a real regression. When the fix ships, drop the exclusion from this panel and from the CosySystemtestFeatureFailing alert rule \u2014 the CosySystemtestKnownBugFixed rule mails a reminder. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-rel-unexpected-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\",feature!~\"templates|server-from-template\"}[26h]) == 0) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [
+        {
+          "index": "t0",
+          "thresholdValue": 0,
+          "thresholdFormat": "Background",
+          "thresholdOperator": ">",
+          "thresholdColor": "#e5484d",
+          "thresholdUnit": "none",
+          "thresholdLabel": ""
+        }
+      ],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-rel-skipped",
+      "title": "Skipped (release)",
+      "description": "Features that did NOT run. Expected: 1 (`rcon`, quarantined behind SYSTEMTEST_HEAVY). More than one means a feature silently stopped being tested. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-rel-skipped-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\"}[26h]) == 1) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [
+        {
+          "index": "t0",
+          "thresholdValue": 1,
+          "thresholdFormat": "Background",
+          "thresholdOperator": ">",
+          "thresholdColor": "#f6be00",
+          "thresholdUnit": "none",
+          "thresholdLabel": ""
+        }
+      ],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-rel-reported",
+      "title": "Features reported (release)",
+      "description": "Total feature rows in the last run \u2014 every feature reports feature_skipped, so this is the matrix size. Expected: 20. A drop means the run was cut short (or a spec file vanished) and the other tiles are counting an incomplete matrix.",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-rel-reported-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\"}[26h])) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-rel-age",
+      "title": "Hours since last release run",
+      "description": "Freshness. The nightly runs at 02:30 UTC, so this should stay under 26 h. 999 means no release run has reported for at least 7 days. Alert: CosySystemtestStale.",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-rel-age-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "((time() - max(last_over_time(cosy_platform_systemtest_last_run_timestamp_seconds{channel=\"release\"}[7d]))) / 3600) or vector(999)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "h",
+      "thresholds": [
+        {
+          "index": "t0",
+          "thresholdValue": 26,
+          "thresholdFormat": "Background",
+          "thresholdOperator": ">",
+          "thresholdColor": "#e5484d",
+          "thresholdUnit": "none",
+          "thresholdLabel": ""
+        }
+      ],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 1,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "row-matrix",
+      "title": "Feature \u00d7 time \u2014 release",
+      "description": "When a feature broke and for how long. Values are carried forward for 26 h, so one nightly sample draws a full day-wide step rather than a dot.",
+      "panelTypes": "row",
+      "contextLinks": {
+        "linksData": []
+      },
+      "query": {
+        "builder": {
+          "queryData": [],
+          "queryFormulas": []
+        },
+        "id": "",
+        "queryType": "builder"
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ],
+      "softMax": null,
+      "softMin": null
+    },
+    {
+      "id": "g-rel-red",
+      "title": "Failing features over time (release)",
+      "description": "Stacked band per FAILING feature \u2014 the stack height is how many features are red and each band shows exactly when that feature broke and when it recovered. Passing features are filtered out, so the legend only ever names what is actually broken. The two permanent bands are the documented product bug. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "panelTypes": "graph",
+      "query": {
+        "id": "g-rel-red-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "(1 - last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h])) > 0",
+            "legend": "{{feature}}",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": true,
+      "fillSpans": true,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "g-rel-status",
+      "title": "Feature status over time \u2014 every feature (release)",
+      "description": "1 = passed, 0 = failed, gap = the feature did not run (skips are deliberately absent from this metric \u2014 see 'Features not running' below). Use the legend to isolate a single feature's history.",
+      "panelTypes": "graph",
+      "query": {
+        "id": "g-rel-status-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h])",
+            "legend": "{{feature}}",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 1,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "g-rel-skipped",
+      "title": "Features not running over time (release)",
+      "description": "A line here means the feature was SKIPPED \u2014 untested, which is neither a pass nor a fail. `rcon` is expected. Any other feature appearing here is a coverage regression and is alerted on by CosySystemtestFeatureNotRunning.",
+      "panelTypes": "graph",
+      "query": {
+        "id": "g-rel-skipped-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\"}[26h]) == 1",
+            "legend": "{{feature}}",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 1,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "row-duration",
+      "title": "Duration trends (release)",
+      "description": "Creeping slowness shows up here long before it turns into a timeout.",
+      "panelTypes": "row",
+      "contextLinks": {
+        "linksData": []
+      },
+      "query": {
+        "builder": {
+          "queryData": [],
+          "queryFormulas": []
+        },
+        "id": "",
+        "queryType": "builder"
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ],
+      "softMax": null,
+      "softMin": null
+    },
+    {
+      "id": "g-rel-duration",
+      "title": "Feature duration (release)",
+      "description": "Wall-clock seconds per feature per run. Skipped features are absent rather than 0, so a quarantined feature cannot masquerade as 'it got fast'.",
+      "panelTypes": "graph",
+      "query": {
+        "id": "g-rel-duration-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "last_over_time(cosy_platform_systemtest_feature_duration_seconds{channel=\"release\"}[26h])",
+            "legend": "{{feature}}",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "s",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-rel-total-duration",
+      "title": "Suite time (release)",
+      "description": "Sum of all feature durations in the last run. The CI job has timeout-minutes: 60; a run that approaches it starts losing features to cancellation.",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-rel-total-duration-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "sum(last_over_time(cosy_platform_systemtest_feature_duration_seconds{channel=\"release\"}[26h])) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "s",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-rel-slowest",
+      "title": "Slowest feature (release)",
+      "description": "Duration of the single slowest feature in the last run.",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-rel-slowest-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "max(last_over_time(cosy_platform_systemtest_feature_duration_seconds{channel=\"release\"}[26h])) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "s",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-rel-slow-count",
+      "title": "Features over 120 s (release)",
+      "description": "How many features individually took more than two minutes. Watch the trend, not the absolute number \u2014 the heavyweight template/Minecraft paths are legitimately slow.",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-rel-slow-count-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_duration_seconds{channel=\"release\"}[26h]) > 120) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "row-build",
+      "title": "Build under test & drill-down",
+      "description": "Which images produced these results, and the GitHub run that recorded them.",
+      "panelTypes": "row",
+      "contextLinks": {
+        "linksData": []
+      },
+      "query": {
+        "builder": {
+          "queryData": [],
+          "queryFormulas": []
+        },
+        "id": "",
+        "queryType": "builder"
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ],
+      "softMax": null,
+      "softMin": null
+    },
+    {
+      "id": "t-runs",
+      "title": "Runs in window \u2014 image tags & GitHub run link",
+      "description": "One row per run in the dashboard's time range, carrying the resource attributes every data point is tagged with. A red cell in the matrix above is attributable to the backend/frontend image tag here, and the run URL leads to the Playwright HTML report, traces and videos. (Builder query rather than PromQL: the attribute keys contain dots, which PromQL label names cannot express.)",
+      "panelTypes": "table",
+      "query": {
+        "id": "t-runs-q",
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "queryName": "A",
+              "dataSource": "metrics",
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "cosy_platform_systemtest_run_success",
+                  "temporality": "unspecified",
+                  "timeAggregation": "latest",
+                  "spaceAggregation": "max",
+                  "reduceTo": "last"
+                }
+              ],
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "key": "channel",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "cosy.backend.image_tag",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "cosy.frontend.image_tag",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "cosy.systemtest.run_url",
+                  "type": "tag"
+                }
+              ],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "selectColumns": []
+            }
+          ],
+          "queryFormulas": []
+        }
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "columnUnits": {},
+      "customLegendColors": {},
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "zero",
+      "opacity": "1",
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "row-staging",
+      "title": "Staging channel \u2014 pre-release builds (heads-up, not an incident)",
+      "description": "The staging channel installs a freshly pushed sha-<short> image instead of the published tags, so it answers 'will the NEXT release break this?'. Runs are push-triggered, not nightly, so these tiles look back 7 days and going quiet is normal. Alerting on this channel is notification-only (severity: info).",
+      "panelTypes": "row",
+      "contextLinks": {
+        "linksData": []
+      },
+      "query": {
+        "builder": {
+          "queryData": [],
+          "queryFormulas": []
+        },
+        "id": "",
+        "queryType": "builder"
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ],
+      "softMax": null,
+      "softMin": null
+    },
+    {
+      "id": "v-stg-pass",
+      "title": "Passing (staging)",
+      "description": "Features that passed in the most recent staging run (7-day lookback).",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-stg-pass-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"staging\"}[7d]) == 1) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-stg-fail",
+      "title": "Failing (staging)",
+      "description": "Features that failed in the most recent staging run. NOT excluded from the known product-bug list on purpose: the template fix is already on frontend main, so these two going green here is the signal that the next release repairs them.",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-stg-fail-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"staging\"}[7d]) == 0) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [
+        {
+          "index": "t0",
+          "thresholdValue": 0,
+          "thresholdFormat": "Background",
+          "thresholdOperator": ">",
+          "thresholdColor": "#f6be00",
+          "thresholdUnit": "none",
+          "thresholdLabel": ""
+        }
+      ],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-stg-skipped",
+      "title": "Skipped (staging)",
+      "description": "Features that did not run in the most recent staging run.",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-stg-skipped-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"staging\"}[7d]) == 1) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-stg-age",
+      "title": "Hours since last staging run",
+      "description": "Staging is push-triggered, so a large value means nobody pushed \u2014 not a fault. 999 = no staging run in 30 days (expected until the Phase 4 dispatch hooks land).",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-stg-age-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "((time() - max(last_over_time(cosy_platform_systemtest_last_run_timestamp_seconds{channel=\"staging\"}[30d]))) / 3600) or vector(999)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "h",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 1,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "g-stg-red",
+      "title": "Failing features over time (staging)",
+      "description": "Same stacked-band view as the release matrix, for the pre-release build. A band that exists here but not on release = the next version regresses that feature. A band that exists on release but not here = the next version fixes it.",
+      "panelTypes": "graph",
+      "query": {
+        "id": "g-stg-red-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "(1 - last_over_time(cosy_platform_systemtest_feature_status{channel=\"staging\"}[7d])) > 0",
+            "legend": "{{feature}}",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": true,
+      "fillSpans": true,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "row-known",
+      "title": "Known expected reds & skips \u2014 read this before triaging",
+      "description": "EXPECTED REDS: `templates` and `server-from-template` fail on a confirmed bug in the RELEASED product (v1.0.3 strict-compares a string template game_id against a numeric games-API id, so the wizard never lists a template). EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "panelTypes": "row",
+      "contextLinks": {
+        "linksData": []
+      },
+      "query": {
+        "builder": {
+          "queryData": [],
+          "queryFormulas": []
+        },
+        "id": "",
+        "queryType": "builder"
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ],
+      "softMax": null,
+      "softMin": null
+    },
+    {
+      "id": "v-known-red",
+      "title": "Known product-bug reds (expected 2)",
+      "description": "`templates` and `server-from-template` are RED on purpose: released v1.0.3 compares a string template `game_id` against the numeric `external_game_id` from the games API, so the create wizard always reports 'No templates are available for this game'. Fixed on frontend main, unreleased. The specs are deliberately NOT skipped \u2014 they are detecting a genuine broken feature, and will go green on their own when a release ships the fix. Expected value: 2. If this reads 0, the fix has shipped: remove the feature!~\"templates|server-from-template\" exclusion from the 'Unexpected failures' tile and from the CosySystemtestFeatureFailing alert. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-known-red-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\",feature=~\"templates|server-from-template\"}[26h]) == 0) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "v-known-skip",
+      "title": "Intentional skips (expected 1: rcon)",
+      "description": "`rcon` is quarantined behind SYSTEMTEST_HEAVY: across runs 12-15 Minecraft (itzg, TYPE=PAPER) never reached a stable RUNNING within the 7-minute ready budget on a 4-vCPU GitHub-hosted runner, at ~20 minutes per attempt. RCON is therefore UNVERIFIED in CI \u2014 it is exercised only with SYSTEMTEST_HEAVY=1 locally or on a larger runner. Expected value: 1. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md",
+      "panelTypes": "value",
+      "query": {
+        "id": "v-known-skip-q",
+        "queryType": "promql",
+        "promql": [
+          {
+            "name": "A",
+            "query": "count(last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\",feature=\"rcon\"}[26h]) == 1) or vector(0)",
+            "legend": "",
+            "disabled": false
+          }
+        ],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filters": {
+                "items": [],
+                "op": "AND"
+              },
+              "groupBy": [],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "",
+                  "temporality": null,
+                  "timeAggregation": "avg",
+                  "spaceAggregation": "avg",
+                  "reduceTo": "sum"
+                }
+              ]
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [
+          {
+            "name": "A",
+            "legend": "",
+            "disabled": false,
+            "query": ""
+          }
+        ]
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "empty",
+      "opacity": "1",
+      "isLogScale": false,
+      "mergeAllActiveQueries": false,
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "columnUnits": {},
+      "customLegendColors": {},
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "GLOBAL_TIME",
+      "contextLinks": {
+        "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    }
+  ]
+}

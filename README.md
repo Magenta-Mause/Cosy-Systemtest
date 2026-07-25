@@ -227,8 +227,72 @@ would leave the dashboard stale with nobody noticing, which is the failure mode 
 reporting exists to prevent. The summary is written by an earlier step, so the results
 artifact survives a failed push intact.
 
+## The SigNoz dashboard
+
+[docs/signoz-dashboard.json](docs/signoz-dashboard.json) is the version-controlled
+definition of the **"Cosy Systemtest"** dashboard on
+[signoz.jannekeipert.de](https://signoz.jannekeipert.de). **This file is the source of
+truth** — SigNoz stores dashboards in its own database, so a change clicked together in
+the UI exists nowhere else until it is exported back here.
+
+**Import (first time):** SigNoz → *Dashboards* → *New dashboard* → *Import JSON* →
+paste the file → *Import and next*.
+
+**Update:** open the dashboard → *⋮* (top right) → *Edit JSON*, replace the contents,
+save. Importing the file again instead creates a **second** dashboard with the same
+name, which is how you end up with two half-maintained copies.
+
+**Export after any UI edit:** *⋮* → *Export JSON*, write it over `docs/signoz-dashboard.json`
+and commit it in the same change. A UI-only edit is a silent fork of this file.
+
+What is on it:
+
+| Section | Answers |
+|---|---|
+| Release channel — current state | Is the published product healthy *right now*? Passing / failing / **unexpected failures** / skipped / features reported / hours since the last run |
+| Feature × time — release | *When* did a feature break, and for how long? A stacked band per failing feature, plus per-feature status and skip history |
+| Duration trends | Is anything getting slower? Per-feature duration over time, suite total, slowest feature, count over 120 s |
+| Build under test | Which images produced this result? Per-run table of `cosy.backend.image_tag` / `cosy.frontend.image_tag` / the GitHub run URL — so a red cell is attributable to a build and one click from the report, trace and video |
+| Staging channel | Will the *next* release break this? Same view for pre-release `sha-<short>` builds |
+| Known expected reds & skips | The two documented product-bug reds and the one intentional skip, stated explicitly rather than left to look like breakage |
+
+**Every query wraps its metric in `last_over_time(...[26h])`, on purpose.** A nightly
+publishes exactly one sample per feature per day; Prometheus' 5-minute lookback would
+blank the entire dashboard five minutes after a run finished. The 26 h window carries the
+last run forward so one nightly sample draws a full day-wide step.
+
+**The dashboard is expected to show 2 reds and 1 skip.** `templates` and
+`server-from-template` fail on a confirmed bug in *released* v1.0.3, and `rcon` is
+quarantined — both are documented in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md), which
+every affected panel's description links to. Rather than hide them, the dashboard states
+them: the **"Unexpected failures (release)"** tile counts failures *excluding* those two,
+so it is the one tile that means "something new broke", and the *Known expected reds*
+row shows the expected counts so a drift in either direction is obvious. Nothing is
+skipped or suppressed to make the dashboard look green.
+
+### Alerts
+
+Five SigNoz rules deliver through the existing `n8n-webhook` channel → n8n →
+mail-service → email. Their JSON lives in the cluster deployment repo under
+`infrastructure/signoz-alerts/` (house convention), not here:
+
+| Rule | Severity | Fires when |
+|---|---|---|
+| `CosySystemtestFeatureFailing` | critical | A feature failed in **every** release run of the last 28 h (≥ 2 runs). One flaky night does not page: the previous run's pass is still inside the window. Excludes the two known-bug features. |
+| `CosySystemtestStale` | warning | No release run reported for > 26 h — the nightly is at 02:30 UTC, so this means one was missed entirely. Includes a No-Data condition; a silent dashboard must not read as a calm one. |
+| `CosySystemtestStagingFeatureFailing` | info | A feature failed on the latest pre-release build. Notification-only — a broken *next* version is a heads-up, not an incident. |
+| `CosySystemtestFeatureNotRunning` | warning | A feature reported `feature_skipped=1` in every run of the last 28 h, i.e. it silently stopped being tested. Excludes `rcon`. |
+| `CosySystemtestKnownBugFixed` | info | A known-red feature went green for two runs — the release shipped the fix, so the exclusions above (and this rule) should be removed. |
+
+If you quarantine a feature or a new known bug appears, update the exclusions in those
+rules **and** in the "Unexpected failures" panel in the same change as
+[docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md) — an exclusion nobody remembers is an
+untested feature nobody notices.
+
 ## Documentation
 
 - [docs/test-architecture.md](docs/test-architecture.md) — layers, install/credential flow, why a runner VM.
 - [docs/testid-gaps.md](docs/testid-gaps.md) — `data-testid`s to add in the frontend (the suite has none to use yet).
+- [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md) — released-product behaviours and the two confirmed product bugs behind the expected reds.
+- [docs/signoz-dashboard.json](docs/signoz-dashboard.json) — the SigNoz dashboard definition (import/update instructions above).
 - [CLAUDE.md](CLAUDE.md) — agent-facing conventions.

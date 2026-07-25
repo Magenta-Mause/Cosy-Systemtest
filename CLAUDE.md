@@ -106,6 +106,20 @@ unaffected. When they *are* set, a failed push exits **1** (see convention 8).
     series, so a panel would mix both and an alert would fire for the wrong one.
     `cosy_platform_` names *this* repo's subject: the Cosy game-server platform. Do
     not "simplify" the prefix away, and give any new metric the same one.
+13. **`docs/signoz-dashboard.json` is the source of truth for the dashboard**, not
+    SigNoz's database. After any edit in the SigNoz UI, export the JSON back over that
+    file in the same change — an unexported UI edit is a silent fork. Every panel query
+    must wrap its metric in `last_over_time(...[26h])`: a nightly publishes one sample
+    per day and Prometheus' 5-minute lookback would otherwise blank the dashboard
+    minutes after a run. Alert rules live in the cluster deployment repo under
+    `infrastructure/signoz-alerts/`. See the README's "The SigNoz dashboard" section.
+14. **Known reds are excluded from paging, never from the suite.** `templates` and
+    `server-from-template` (released product bug) and `rcon` (quarantined) are excluded
+    from the alert rules and from the dashboard's "Unexpected failures" tile — a rule
+    that fires every night forever gets muted and then misses the real regression. They
+    are NOT skipped in the suite and NOT hidden on the dashboard, which shows their
+    expected counts explicitly. When you add or remove such an exclusion, change the
+    rule, the panel and `docs/KNOWN-ISSUES.md` in one commit.
 
 ## Layout
 
