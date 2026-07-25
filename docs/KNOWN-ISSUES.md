@@ -332,26 +332,56 @@ any of it happened. Note the asymmetry that makes this so confusing: the *comman
 keep working, so `docker ps` looks healthy and nothing in the backend log looks
 broken — only the status machine is frozen.
 
-**Likely trigger.** `EngineConfiguration.dockerClient()` builds the transport with
-`.responseTimeout(Duration.ofSeconds(45))`. That is a socket read timeout, and
-`/events` is a long-lived stream that emits nothing while no container starts or
-dies — so a quiet window trips a `SocketTimeoutException` on the stream, which lands
-in the un-recovering `onError`. This is a long-standing docker-java footgun: a
-`responseTimeout` is right for one-shot commands and wrong for streaming endpoints.
-It also explains the run-to-run non-determinism — whether the stream dies depends on
-the accidental spacing of container activity, which is why run 17 (same code, same
-image) stayed green end to end.
+**CONFIRMED TRIGGER: a server DELETED while its container is still running.** Read
+straight off the backend log of a run in which the wedge happened:
+
+```
+ERROR c.m.c.s.e.docker.DockerEventHandler : Error in Docker event listener
+org.springframework.orm.ObjectOptimisticLockingFailureException:
+  Unexpected row count (expected row count 1 but was 0) [update game_server_entity set ...]
+  at … DockerEventHandler.handleDieEvent → notifyListeners
+     → GameServerService.handleGameServerEngineEvent → handleGameServerEngineFailEvent
+     → updateStatus → GameServerEntity
+```
+
+`GameServerService.deleteGameServerById` stops and removes the container **first** and
+deletes the row **after**, so the container's `die` event races the row's disappearance.
+The released `DockerEventHandler` handles that event on the docker-java callback thread
+with no isolation at all, and both outcomes of the race are fatal:
+
+- the row is already gone → `handleDieEvent` calls the server's status supplier
+  (`getStatusFromEntity` → `getOrThrow`), which throws **404**; or
+- the row is still there → the `die` is classified `FAILED` (the status is `RUNNING`, not
+  `STOPPING`) and `updateStatus` writes to a row that vanishes before the flush →
+  **`ObjectOptimisticLockingFailureException`** (the stack above).
+
+Either exception escapes `notifyListeners` (a bare `forEach`, no try/catch), escapes
+`onNext`, and **ends the subscription**; `onError` merely logs it. It fired exactly once
+in run 18 — that was enough. It is intermittent because it depends on delete-versus-die
+timing, which is why run 17 (same code, same image) stayed green end to end.
+
+**The `responseTimeout` theory is DISPROVEN.** The earlier suspicion was that
+`EngineConfiguration.dockerClient()`'s `.responseTimeout(Duration.ofSeconds(45))` — a
+socket read timeout applied to the long-lived `/events` stream — tears the stream down
+during a quiet window. A control experiment settled it: a spec that idled for 90 s (2× the
+45 s timeout) with zero container activity and then required a stop to be observed
+**PASSED against the OLD, buggy backend `sha-e200a4d`**. Silence does not kill the stream.
+The idle spec was therefore worthless as a guard (green on buggy and fixed builds alike)
+and has been replaced — see below. Not applying a `responseTimeout` to streaming commands
+remains good hygiene, just not the cause of this bug.
 
 **Suggested product fixes** (backend, not this repo):
 
-1. Make the event subscription **self-healing**: reconnect with backoff in `onError`
-   *and* `onComplete`, and re-reconcile statuses from real container state on each
-   reconnect (`GameServerService.init()` already contains that reconciliation logic —
-   it just never runs again).
-2. Do not apply `responseTimeout` to streaming commands (`eventsCmd`, `logsCmd`), or
-   use a separate `DockerHttpClient` for them.
+1. **Isolate per-event handling**: an exception from handling ONE event must be caught and
+   logged inside `onNext` instead of ending the stream, and vanished servers must be
+   handled explicitly (no supplier / no row → nothing to update, not an exception).
+2. Make the event subscription **self-healing**: reconnect with backoff in `onError` *and*
+   `onComplete`, and re-reconcile statuses from real container state on each reconnect
+   (`GameServerService.init()` already contains that reconciliation logic — it just never
+   runs again).
 3. Belt and braces: a periodic reconciliation sweep, so a missed event self-corrects
-   instead of hanging a server forever.
+   instead of hanging a server forever. Also good hygiene: no `responseTimeout` on
+   streaming commands (`eventsCmd`, `logsCmd`), or a separate `DockerHttpClient` for them.
 
 **How the suite reports it now.** `helpers/docker.ts` probes the real container state
 whenever a transitional status outlives `EVENT_STREAM_WEDGE_GRACE_MS` (45 s):
@@ -369,7 +399,7 @@ workflow extracts `docker-event-stream-errors.txt` from the (now complete) backe
 log. If Docker is not queryable from the test process the diagnosis is skipped and
 plain timeout behaviour applies.
 
-**Regression guard: the `event-stream-recovery` spec.** Detection alone was not enough.
+**Regression guard: the `event-stream-resilience` spec.** Detection alone was not enough.
 Every other spec touches the event stream only *incidentally*, back-to-back with other
 container activity, so whether the stream dies depends on the accidental spacing of that
 activity — run 17 was green and run 18 wedged four specs on the very same image. A run
@@ -377,37 +407,49 @@ against the fix (backend `sha-b8bec7c`) was likewise green **without ever exerci
 recovery path**, because the stream never died in it. A green run therefore proved
 nothing.
 
-`tests/specs/event-stream-recovery.spec.ts` (`@extended`, ~2 min) removes the luck by
-provoking the condition on purpose:
+`tests/specs/event-stream-resilience.spec.ts` (`@extended`, ~4 min) removes the luck by
+performing the sequence that actually kills the stream:
 
 1. **Control** — bring a throwaway tosios server to `RUNNING`. `AWAITING_UPDATE →
    RUNNING` has exactly one source, the Docker `start` event, so this *proves the stream
-   was alive* going into the idle window (without it, a failure could not be attributed
-   to the idling).
-2. **Provoke** — idle for `EVENT_STREAM_IDLE_PROBE_MS` (90 s = 2 ×
-   `BACKEND_DOCKER_RESPONSE_TIMEOUT_MS`) with zero container lifecycle activity, then
-   replay `docker events --since … --until …` over the window using the backend's own
-   daemon-side filters (`type=container`, actions `start|die|stop|pause|unpause` — which
-   exclude the `exec_*`/`health_status` traffic healthchecks produce) to confirm the
-   subscription really received nothing. CI's `workers: 1` rules out a parallel spec
-   feeding it an event; the replay catches it anywhere else.
-3. **Detect** — stop the server through the UI and require `STOPPED` within
-   `EVENT_STREAM_OBSERVE_TIMEOUT_MS` (90 s, not the generous 300 s). `RUNNING → STOPPING
-   → STOPPED` needs no image pull and no container creation, so nothing legitimate is
-   left to be slow about. The wedge probe above still fires first, at 45 s, telling
-   "the container never stopped" apart from "the container stopped and the backend never
-   heard" — the latter being the smoking gun. The failure message names the hypothesis
-   (45 s `responseTimeout` on a stream that emits nothing while idle) and quotes whether
-   the idle window was verified quiet.
+   was alive* going in (without it, a failure could not be told apart from "it was already
+   dead"). The provocation servers are started next, still before any delete, so the whole
+   setup demonstrably runs on a working stream.
+2. **Provoke** — delete `DELETE_WHILE_RUNNING_PROVOCATIONS` (10) servers **while their
+   containers are running**, all at once. Both the count and the concurrency are the
+   mechanism, not decoration. A single delete usually WINS the race: handling one `die`
+   costs a few DB round trips (`h`), while the delete still has a `docker ps` + `docker rm`
+   to do before it commits (`D`), and `h < D` — which is exactly why the bug looked
+   intermittent in the wild. But docker-java delivers events on ONE callback thread, so
+   with N containers dying at once the k-th `die` is only *finished* at ~`k × h` while all
+   N deletes commit at about the same `D`, in parallel; every victim with `k × h > D`
+   therefore loses. Ten gives a comfortable margin over the ~5-15 that `D/h` plausibly is.
+   The spec then waits `EVENT_STREAM_PROVOKE_SETTLE_MS` (5 s), because the DELETE calls
+   return before the events they provoke have been handled.
+3. **Detect** — stop the surviving control server through the UI and require `STOPPED`
+   within `EVENT_STREAM_OBSERVE_TIMEOUT_MS` (90 s, not the generous 300 s). `RUNNING →
+   STOPPING → STOPPED` needs no image pull and no container creation, so nothing
+   legitimate is left to be slow about. The wedge probe above still fires first, at 45 s,
+   telling "the container never stopped" apart from "the container stopped and the backend
+   never heard" — the latter being the smoking gun, which the failure message states
+   explicitly (it re-probes the control container) alongside the named mechanism
+   ("a delete-while-running killed the Docker event subscription") and the container
+   states of the deleted servers at the moment they were deleted.
+
+**Expected verdicts.** Against the old backend `sha-e200a4d` this spec **must FAIL** —
+that is the whole point, and the failure is the wedge diagnosis, not a timeout. Against a
+build of `fix/docker-event-stream-resilience` (per-event exception isolation + vanished
+servers handled + a self-healing subscription) it must **PASS**. The idle spec it replaced
+passed on *both*, which is why it was deleted rather than kept alongside.
 
 **Accepted side effect:** against a backend that still has the bug this spec *causes* the
 wedge rather than stumbling into it, so specs running after it fail too — each in ~45 s
 with the same named diagnosis. That is the honest reading of a broken build: the first
 red row states the root cause instead of four later rows reporting mystery timeouts. It
 runs every night rather than behind a flag because the bug class is severe (every server
-frozen until a backend restart) and the ~2 min is cheap next to the ~46 min a single
+frozen until a backend restart) and the ~4 min is cheap next to the ~46 min a single
 undetected wedge cost in run 18. A single run can opt out with
-`npx playwright test --grep-invert event-stream-recovery`.
+`npx playwright test --grep-invert event-stream-resilience`.
 
 **Why this matters for the budget.** In run 18 the wedge cost `300 s × 3 retries ×
 4 specs` ≈ **46 minutes**, which pushed the job past its 60-minute

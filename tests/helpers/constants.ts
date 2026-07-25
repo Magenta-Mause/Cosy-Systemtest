@@ -89,26 +89,38 @@ export const GAME_SERVER_CONTAINER_PREFIX = 'cosy-';
 export const EVENT_STREAM_WEDGE_GRACE_MS = 45_000;
 
 /**
- * The socket READ timeout the released backend applies to its shared docker-java HTTP
- * client (`EngineConfiguration.dockerClient()` → `.responseTimeout(Duration.ofSeconds(45))`).
- * It is correct for one-shot commands and wrong for the long-lived `/events` stream,
- * which emits nothing while no container starts or dies — so a quiet window longer than
- * this tears the stream down. Mirrored here (not used to talk to Docker) purely so the
- * idle probe below is provably longer than it and says why.
+ * How many servers `event-stream-resilience` deletes WHILE THEIR CONTAINERS RUN, all at
+ * once, to provoke the wedge.
+ *
+ * Each delete makes a container's `die` event race the removal of its own DB row: the
+ * released backend blows up (404 from the status supplier, a zero-row status UPDATE, or a
+ * 404 from the webhook dispatch that ends `updateStatus`) whenever the row disappears
+ * before it has finished handling that event. A SINGLE delete usually wins that race by
+ * luck, because handling one event costs a few DB round trips (call it `h`) while the
+ * delete still has a `docker ps` + `docker rm` to do before it commits (call it `D`), and
+ * `h < D`.
+ *
+ * Deleting many servers simultaneously flips that: docker-java delivers events on ONE
+ * callback thread, so the k-th `die` is only *finished* at roughly `k × h`, while all the
+ * deletes commit at about the same `D` (they run on their own request threads, in
+ * parallel). Every victim with `k × h > D` therefore loses the race. Ten is a comfortable
+ * margin over the ~5-15 that `D/h` plausibly is on a loaded runner, and still costs only
+ * ten tosios starts from a local image. Lowering it makes the guard flaky; raising it only
+ * costs start-up time.
  */
-export const BACKEND_DOCKER_RESPONSE_TIMEOUT_MS = 45_000;
+export const DELETE_WHILE_RUNNING_PROVOCATIONS = 10;
 
 /**
- * How long `event-stream-recovery` deliberately IDLES — no container lifecycle activity
- * whatsoever — before provoking a transition. Twice the backend's response timeout, so
- * the `/events` socket is guaranteed to have exceeded its read deadline with margin for
- * scheduling jitter on a loaded runner. Raising it makes the probe stricter but slower;
- * lowering it below `BACKEND_DOCKER_RESPONSE_TIMEOUT_MS` makes it prove nothing.
+ * Settle time after the provoking deletes return, before the surviving server's stop is
+ * probed. The DELETE calls come back as soon as the rows are gone; it is the *handling*
+ * of the `die` events that follows which either survives or ends the subscription, and
+ * that happens asynchronously on the backend's callback thread. Probing before it has
+ * happened would test nothing.
  */
-export const EVENT_STREAM_IDLE_PROBE_MS = 2 * BACKEND_DOCKER_RESPONSE_TIMEOUT_MS;
+export const EVENT_STREAM_PROVOKE_SETTLE_MS = 5_000;
 
 /**
- * DELIBERATELY SHORT budget for "the backend observed the post-idle transition".
+ * DELIBERATELY SHORT budget for "the backend observed the post-provocation transition".
  * A healthy backend applies a container `die` within a couple of seconds; the generous
  * `SERVER_COLD_START_TIMEOUT_MS` exists for cold image pulls, which cannot apply here
  * (the image is local and the container already exists). Anything slower than this is

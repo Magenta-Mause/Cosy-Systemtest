@@ -68,60 +68,6 @@ export function probeServerContainer(serverUuid: string): ContainerProbe {
   return { kind: 'present', state: (state ?? '').trim(), status: (status ?? '').trim() };
 }
 
-/**
- * The exact `/events` subscription the released backend opens
- * (`DockerEventHandler.startEventListener()`):
- *
- *   client.eventsCmd().withEventTypeFilter("container")
- *                     .withEventFilter("start", "die", "stop", "pause", "unpause")
- *
- * Both filters are applied by the DAEMON, so the backend's socket receives *only* these
- * actions — notably NOT the `exec_create`/`exec_start`/`exec_die`/`health_status` traffic
- * a container healthcheck produces. That is what makes a quiet window genuinely quiet on
- * the wire, and therefore what the idle probe has to measure.
- */
-const SUBSCRIBED_EVENT_ACTIONS = ['start', 'die', 'stop', 'pause', 'unpause'] as const;
-
-/**
- * Replay the container events the backend's subscription WOULD have received in
- * `[sinceEpochSeconds, untilEpochSeconds]`. `docker events` with a past `--until`
- * returns the historical window and exits, so this never blocks.
- *
- * Used by `event-stream-recovery` to prove its idle window really starved the stream:
- * any event here would have reset the socket's read deadline and invalidated the probe.
- * Returns `null` when Docker is not queryable from the test process (same graceful
- * degradation as `probeServerContainer`).
- */
-export function subscribedContainerEventsBetween(
-  sinceEpochSeconds: number,
-  untilEpochSeconds: number,
-): string[] | null {
-  try {
-    const raw = execFileSync(
-      'docker',
-      [
-        'events',
-        '--since',
-        String(sinceEpochSeconds),
-        '--until',
-        String(untilEpochSeconds),
-        '--filter',
-        'type=container',
-        ...SUBSCRIBED_EVENT_ACTIONS.flatMap((action) => ['--filter', `event=${action}`]),
-        '--format',
-        '{{.Action}} {{.Actor.Attributes.name}}',
-      ],
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: DOCKER_PROBE_TIMEOUT_MS },
-    );
-    return raw
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
-  } catch {
-    return null;
-  }
-}
-
 /** Human-readable one-liner for error messages. */
 export function describeProbe(probe: ContainerProbe): string {
   switch (probe.kind) {
@@ -188,8 +134,10 @@ function wedgeDiagnosis(
     `so the status can never advance.\n` +
     `  DockerEventHandler opens ONE /events subscription at startup and never restarts it ` +
     `(onError only logs "Error in Docker event listener"), and container state is reconciled ` +
-    `only once, in GameServerService.init(). Every start/stop for the rest of this backend's ` +
-    `lifetime will hang the same way; only a backend restart recovers it.\n` +
+    `only once, in GameServerService.init(). Any exception while handling a single event ends ` +
+    `that subscription — typically a "die" for a server that was DELETED while running, whose ` +
+    `row is gone by the time the event is handled. Every start/stop for the rest of this ` +
+    `backend's lifetime will hang the same way; only a backend restart recovers it.\n` +
     `  Confirm in results/diagnostics/cosy-backend.log → "Error in Docker event listener". ` +
     `See docs/KNOWN-ISSUES.md ("backend loses the Docker event stream").`
   );
