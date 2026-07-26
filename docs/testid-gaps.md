@@ -125,6 +125,7 @@ Icon-only controls with **no accessible name** are located structurally today
 | `public-dashboard-visible-toggle`, widget delete btn | `.../GenericLayoutBuilder/GenericLayoutBuilder.tsx` | `getByRole('button', { name: 'Make Public Dashboard Visible' })`; layout-builder delete-widget is icon-only, **no name** |
 | `game-option-{slug}`, `template-option-{id}` | `.../CreateGameServer/GenericGameServerCreationInputField.tsx`, `.../CreationSteps/Step1/*` | **v1.1.0:** game and template are both on step 1 — the `#external_game_id` AutoComplete no longer exists. Game = sidebar entry by name (generic entry = "Generic Server"); template cards = `role=option` in a `role=listbox` on step 1, and clicking one self-advances to step 2 |
 | console `send-btn` | `.../LogDisplay/LogDisplay.tsx` | icon-only, **no name** → commands submitted via Enter |
+| `notification-modal` + `notification-details` | `src/components/ui/notification-modal.tsx` | `getByRole('dialog')` — the app-wide success/error modal has no id at all, and its details `<pre>` (where an API error's explanation lands) has none either, so `port-conflict` asserts against the whole dialog's text. A page under test that opens any other dialog at the same time would match ambiguously |
 
 ## Feature notes (released version — not just selectors)
 
