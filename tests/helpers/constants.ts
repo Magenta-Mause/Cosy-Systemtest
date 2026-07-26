@@ -211,6 +211,27 @@ export const MINECRAFT_MEMORY_GIB = '2';
  */
 export const MINECRAFT_JVM_MEMORY = '1G';
 
+/**
+ * Host port the `port-conflict` spec makes two servers fight over. Deliberately in
+ * the ephemeral-ish high range and not one of Cosy's own (8080) or a game default
+ * (25565/25575), so a collision here is the one the spec provokes and not an
+ * accident of what else the runner happens to have listening.
+ */
+export const PORT_CONFLICT_HOST_PORT = 34567;
+
+/**
+ * Port tosios serves on inside its container — the container side of the mapping
+ * (the same one Cosy's own dummy data maps for this image).
+ */
+export const TOSIOS_CONTAINER_PORT = 3001;
+
+/**
+ * How long a server blocked by a port conflict is watched to make sure it does not
+ * start after all. Short on purpose: the rejection is synchronous, so anything that
+ * happens here happens immediately — this only has to outlast a stray status frame.
+ */
+export const PORT_CONFLICT_NO_START_WINDOW_MS = 15_000;
+
 /** Games known to exist in the hosted catalog (Cosy-templates/templates/*). */
 export const KNOWN_TEMPLATE_GAMES = ['minecraft', 'terraria', 'cs2', 'palworld', 'ark'] as const;
 

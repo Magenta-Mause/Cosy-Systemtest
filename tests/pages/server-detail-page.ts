@@ -109,6 +109,29 @@ export class ServerDetailPage {
     await expect(this.startStopButton.first()).toBeDisabled({ timeout: UI_ACTION_TIMEOUT_MS });
   }
 
+  /**
+   * Assert the server does NOT reach `status` for the whole window.
+   *
+   * `expect(...).not.toContainText()` cannot express this: it passes the moment the
+   * text does not match, which is already true before a start would have had any
+   * chance to happen. Proving a start was really refused needs the negative held over
+   * time, so the indicator is sampled until the window is up.
+   */
+  async expectStatusNeverBecomes(
+    status: keyof typeof STATUS_LABEL,
+    windowMs: number,
+  ): Promise<void> {
+    const indicator = this.page.getByTestId('server-status-indicator');
+    const deadline = Date.now() + windowMs;
+    do {
+      await expect(
+        indicator,
+        `server reached ${status} although its host port is taken`,
+      ).not.toContainText(STATUS_LABEL[status], { timeout: UI_ACTION_TIMEOUT_MS });
+      await this.page.waitForTimeout(1_000);
+    } while (Date.now() < deadline);
+  }
+
   async start(): Promise<void> {
     await this.clickStartStop('Start');
   }
