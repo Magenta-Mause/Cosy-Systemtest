@@ -210,8 +210,8 @@ run URL, an image tag across a release) gives every run its **own series**. Two 
 then break, both silently:
 
 - `last_over_time(...[26h])` returns one sample **per run** rather than the latest run's,
-  so the dashboard's count tiles read *feature × run* — 32 "failing" for ~5 red features
-  across 6 runs.
+  so the dashboard's count tiles read *feature × run* — 32 "failing" for ~5 red
+  features across 6 runs.
 - `count_over_time(...) >= 2` can never be satisfied, because one run writes exactly one
   sample per series. That is the "two consecutive runs" clause in
   `CosySystemtestFeatureFailing`, which therefore could not fire **at all**.
@@ -239,7 +239,8 @@ Everything identifying a run — `cosy.backend.image_tag`, `cosy.frontend.image_
 `cosy_platform_systemtest_run_info` as data-point attributes, and on **every span of the
 run's trace** as resource attributes, where per-run identity is the whole point.
 Between them a run still names the build it tested, links back to the GitHub run, opens
-the run's hosted HTML report (videos and traces included), names the SigNoz trace of the same run,
+the run's hosted HTML report (videos and traces included), names the SigNoz trace of
+the same run,
 and says when the run reported.
 
 `cosy.systemtest.run_at` is `summary.generatedAt` (the moment the summary was written,
@@ -335,8 +336,8 @@ https://systemtest-reports.jannekeipert.de/<channel>/<github-run-id>/index.html
 `cosy.systemtest.run_url`, so the two links reproduce one another by hand. The runner
 puts the full URL in `results/summary.json` (`reportUrl`) and pushes it as the
 `cosy.systemtest.report_url` attribute on `cosy_platform_systemtest_run_info`, which the
-dashboard's **"Runs in window"** table shows as a column and offers as the **"Watch this run's report"**
-context link.
+dashboard's **"Runs in window"** table shows as a column and offers as the
+**"Watch this run's report"** context link.
 
 The URL is **derived**, not reported back from the upload: `buildReportUrl()` composes
 it from `REPORTS_BASE_URL`, the channel and `GITHUB_RUN_ID`. That keeps the link
@@ -393,8 +394,8 @@ name, which is how you end up with two half-maintained copies.
 **Export after any UI edit:** *⋮* → *Export JSON*, write it over `docs/signoz-dashboard.json`
 and commit it in the same change. A UI-only edit is a silent fork of this file.
 
-**Merging a PR that touches this file changes nothing on its own** — SigNoz reads its own
-database, not this repo. The *Update* step above is what applies it, and it is easy to
+**Merging a PR that touches this file changes nothing on its own** — SigNoz reads its
+own database, not this repo. The *Update* step above is what applies it, and it is easy to
 forget because everything looks committed and done.
 
 **Order matters when a change also touches the metrics.** If a panel starts using a
@@ -405,9 +406,9 @@ metric that the runner does not emit yet, apply it in this order:
 3. *then* update the dashboard JSON in SigNoz.
 
 Do it the other way round and the new panel is simply empty, which reads like a broken
-query rather than missing data. The reverse — updating the runner but not the dashboard —
-leaves the old panel querying a label that no longer exists, which reads as "no data" for
-the same reason.
+query rather than missing data. The reverse — updating the runner but not the
+dashboard — leaves the old panel querying a label that no longer exists, which reads as
+"no data" for the same reason.
 
 What is on it:
 
@@ -422,7 +423,8 @@ What is on it:
 
 **From the dashboard to the run's trace.** The "Runs in window" table groups by
 `cosy.systemtest.trace_id` (an attribute the runner puts on
-`cosy_platform_systemtest_run_info`, holding the id of the trace the same run emitted) and carries a SigNoz **context link**:
+`cosy_platform_systemtest_run_info`, holding the id of the trace the same run emitted)
+and carries a SigNoz **context link**:
 click a row → *Open this run's trace* → `/trace/{{_cosy.systemtest.trace_id}}`, i.e. the
 trace-detail page of that exact run. The id is also visible as a column, so it works by
 copy-paste when the context menu is not available. Context links are a v5-dashboard

@@ -170,8 +170,9 @@ failed push of *either* exits **1** (see convention 8).
     - **Ids come from `crypto.randomBytes`** (16 bytes trace / 8 bytes span, lowercase
       hex), and every feature span sets `parentSpanId` to the root's id — a wrong id
       width or a missing parent shows up in SigNoz as orphan spans, not as an error.
-    - The trace id is pushed as the metrics resource attribute
-      `cosy.systemtest.trace_id`, which is what lets the dashboard link a run's row to
+    - The trace id also rides on `cosy_platform_systemtest_run_info` as the
+      `cosy.systemtest.trace_id` data-point attribute (NOT on the per-feature metrics —
+      see convention 11), which is what lets the dashboard link a run's row to
       `/trace/<id>`. Keep the two in sync — they are generated once per push.
 15. **Known reds are excluded from paging, never from the suite.** Today the only
     exclusion is `rcon` (quarantined) in `CosySystemtestFeatureNotRunning` — a rule
