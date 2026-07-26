@@ -391,6 +391,19 @@ paste the file → *Import and next*.
 save. Importing the file again instead creates a **second** dashboard with the same
 name, which is how you end up with two half-maintained copies.
 
+**Update by API** (there is no upload button in the UI):
+
+```bash
+curl -sS -X PUT https://signoz.jannekeipert.de/api/v1/dashboards/019f98bc-54fa-73c9-904f-8d3fb493897e \
+  -H "SIGNOZ-API-KEY: $SIGNOZ_API_KEY" -H 'content-type: application/json' \
+  --data-binary @docs/signoz-dashboard.json
+```
+
+`019f98bc-54fa-73c9-904f-8d3fb493897e` is the **live** id. Do not use the `uuid` field
+inside this file — SigNoz mints a new id on import and leaves that field untouched, so it
+still holds the pre-import value and any API call against it 404s. `GET /api/v1/dashboards`
+lists the real ids.
+
 **Export after any UI edit:** *⋮* → *Export JSON*, write it over `docs/signoz-dashboard.json`
 and commit it in the same change. A UI-only edit is a silent fork of this file.
 

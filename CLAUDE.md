@@ -129,7 +129,10 @@ failed push of *either* exits **1** (see convention 8).
 13. **`docs/signoz-dashboard.json` is the source of truth for the dashboard**, not
     SigNoz's database. After any edit in the SigNoz UI, export the JSON back over that
     file in the same change — an unexported UI edit is a silent fork. Every panel query
-    must wrap its metric in `last_over_time(...[26h])`: a nightly publishes one sample
+    must wrap its metric in `last_over_time(...[26h])`, and every counting tile must
+    also dedupe with `count by (feature)` (durations: `max by (feature)`) so it counts
+    FEATURES, not series — otherwise a stray extra series per feature silently
+    multiplies the number, which is exactly how the per-run-series bug went unnoticed: a nightly publishes one sample
     per day and Prometheus' 5-minute lookback would otherwise blank the dashboard
     minutes after a run. Alert rules live in the cluster deployment repo under
     `infrastructure/signoz-alerts/`. The "Runs in window" table is the drill-down panel:

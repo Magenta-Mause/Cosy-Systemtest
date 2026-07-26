@@ -355,7 +355,7 @@
     {
       "id": "v-rel-pass",
       "title": "Passing (release)",
-      "description": "Features that passed in the most recent release run. Verified against run 30153115819: 17 of 20 features pass. Counts the LATEST run only: successive runs land on the same series per (feature, channel), so last_over_time returns one sample per feature, not one per feature per run.",
+      "description": "Features that passed in the most recent release run. Verified against run 30153115819: 17 of 20 features pass. Counts FEATURES, not series: the outer count wraps a `count by (feature)` so a feature is counted once even if several series carry it. With the data model fixed there is one series per (feature, channel) anyway; the dedup keeps the tile honest while older series are still inside the window, and after any future label change. Caveat during such a window: a feature whose old and new samples disagree is counted in BOTH the passing and the failing tile.",
       "panelTypes": "value",
       "query": {
         "id": "v-rel-pass-q",
@@ -363,7 +363,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h]) == 1) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h]) == 1)) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -464,7 +464,7 @@
     {
       "id": "v-rel-fail",
       "title": "Failing (release)",
-      "description": "Features that failed in the most recent release run. Two of these are EXPECTED — see the 'Unexpected failures' tile next to it, which is the one to react to. EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md Counts the LATEST run only: successive runs land on the same series per (feature, channel), so last_over_time returns one sample per feature, not one per feature per run.",
+      "description": "Features that failed in the most recent release run. Two of these are EXPECTED — see the 'Unexpected failures' tile next to it, which is the one to react to. EXPECTED SKIP: `rcon` is quarantined behind SYSTEMTEST_HEAVY because Minecraft does not boot within budget on a GitHub-hosted runner. Details: https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md Counts FEATURES, not series: the outer count wraps a `count by (feature)` so a feature is counted once even if several series carry it. With the data model fixed there is one series per (feature, channel) anyway; the dedup keeps the tile honest while older series are still inside the window, and after any future label change. Caveat during such a window: a feature whose old and new samples disagree is counted in BOTH the passing and the failing tile.",
       "panelTypes": "value",
       "query": {
         "id": "v-rel-fail-q",
@@ -472,7 +472,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h]) == 0) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h]) == 0)) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -583,7 +583,7 @@
     {
       "id": "v-rel-unexpected",
       "title": "Unexpected failures (release)",
-      "description": "Failing features in the most recent release run. Red here is a real regression: there are no known-bug exclusions any more — the v1.0.3 create-wizard bug that used to exclude `templates` and `server-from-template` was fixed in v1.1.0, and the exclusion was dropped from this panel and from the CosySystemtestFeatureFailing alert rule together with the CosySystemtestKnownBugFixed reminder rule. `rcon` needs no exclusion here — a skipped feature reports no status sample at all. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md Counts the LATEST run only: successive runs land on the same series per (feature, channel), so last_over_time returns one sample per feature, not one per feature per run.",
+      "description": "Failing features in the most recent release run. Red here is a real regression: there are no known-bug exclusions any more — the v1.0.3 create-wizard bug that used to exclude `templates` and `server-from-template` was fixed in v1.1.0, and the exclusion was dropped from this panel and from the CosySystemtestFeatureFailing alert rule together with the CosySystemtestKnownBugFixed reminder rule. `rcon` needs no exclusion here — a skipped feature reports no status sample at all. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md Counts FEATURES, not series: the outer count wraps a `count by (feature)` so a feature is counted once even if several series carry it. With the data model fixed there is one series per (feature, channel) anyway; the dedup keeps the tile honest while older series are still inside the window, and after any future label change. Caveat during such a window: a feature whose old and new samples disagree is counted in BOTH the passing and the failing tile.",
       "panelTypes": "value",
       "query": {
         "id": "v-rel-unexpected-q",
@@ -591,7 +591,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h]) == 0) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_status{channel=\"release\"}[26h]) == 0)) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -702,7 +702,7 @@
     {
       "id": "v-rel-skipped",
       "title": "Skipped (release)",
-      "description": "Features that did NOT run. Expected: 1 (`rcon`, quarantined behind SYSTEMTEST_HEAVY). More than one means a feature silently stopped being tested. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md Counts the LATEST run only: successive runs land on the same series per (feature, channel), so last_over_time returns one sample per feature, not one per feature per run.",
+      "description": "Features that did NOT run. Expected: 1 (`rcon`, quarantined behind SYSTEMTEST_HEAVY). More than one means a feature silently stopped being tested. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md Counts FEATURES, not series: the outer count wraps a `count by (feature)` so a feature is counted once even if several series carry it. With the data model fixed there is one series per (feature, channel) anyway; the dedup keeps the tile honest while older series are still inside the window, and after any future label change. Caveat during such a window: a feature whose old and new samples disagree is counted in BOTH the passing and the failing tile.",
       "panelTypes": "value",
       "query": {
         "id": "v-rel-skipped-q",
@@ -710,7 +710,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\"}[26h]) == 1) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\"}[26h]) == 1)) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -821,7 +821,7 @@
     {
       "id": "v-rel-reported",
       "title": "Features reported (release)",
-      "description": "Total feature rows in the last run — every feature reports feature_skipped, so this is the matrix size. Expected: 20. A drop means the run was cut short (or a spec file vanished) and the other tiles are counting an incomplete matrix. Counts the LATEST run only: successive runs land on the same series per (feature, channel), so last_over_time returns one sample per feature, not one per feature per run.",
+      "description": "Total feature rows in the last run — every feature reports feature_skipped, so this is the matrix size. Expected: 20. A drop means the run was cut short (or a spec file vanished) and the other tiles are counting an incomplete matrix. Counts FEATURES, not series: the outer count wraps a `count by (feature)` so a feature is counted once even if several series carry it. With the data model fixed there is one series per (feature, channel) anyway; the dedup keeps the tile honest while older series are still inside the window, and after any future label change. Caveat during such a window: a feature whose old and new samples disagree is counted in BOTH the passing and the failing tile.",
       "panelTypes": "value",
       "query": {
         "id": "v-rel-reported-q",
@@ -829,7 +829,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\"}[26h])) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\"}[26h]))) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -1597,7 +1597,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "sum(last_over_time(cosy_platform_systemtest_feature_duration_seconds{channel=\"release\"}[26h])) or vector(0)",
+            "query": "sum(max by (feature) (last_over_time(cosy_platform_systemtest_feature_duration_seconds{channel=\"release\"}[26h]))) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -1815,7 +1815,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_duration_seconds{channel=\"release\"}[26h]) > 120) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_duration_seconds{channel=\"release\"}[26h]) > 120)) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -2165,7 +2165,7 @@
     {
       "id": "v-stg-pass",
       "title": "Passing (staging)",
-      "description": "Features that passed in the most recent staging run (7-day lookback). Counts the LATEST run only: successive runs land on the same series per (feature, channel), so last_over_time returns one sample per feature, not one per feature per run.",
+      "description": "Features that passed in the most recent staging run (7-day lookback). Counts FEATURES, not series: the outer count wraps a `count by (feature)` so a feature is counted once even if several series carry it. With the data model fixed there is one series per (feature, channel) anyway; the dedup keeps the tile honest while older series are still inside the window, and after any future label change. Caveat during such a window: a feature whose old and new samples disagree is counted in BOTH the passing and the failing tile.",
       "panelTypes": "value",
       "query": {
         "id": "v-stg-pass-q",
@@ -2173,7 +2173,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"staging\"}[7d]) == 1) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_status{channel=\"staging\"}[7d]) == 1)) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -2274,7 +2274,7 @@
     {
       "id": "v-stg-fail",
       "title": "Failing (staging)",
-      "description": "Features that failed in the most recent staging run. NOT excluded from the known product-bug list on purpose: the template fix is already on frontend main, so these two going green here is the signal that the next release repairs them. Counts the LATEST run only: successive runs land on the same series per (feature, channel), so last_over_time returns one sample per feature, not one per feature per run.",
+      "description": "Features that failed in the most recent staging run. NOT excluded from the known product-bug list on purpose: the template fix is already on frontend main, so these two going green here is the signal that the next release repairs them. Counts FEATURES, not series: the outer count wraps a `count by (feature)` so a feature is counted once even if several series carry it. With the data model fixed there is one series per (feature, channel) anyway; the dedup keeps the tile honest while older series are still inside the window, and after any future label change. Caveat during such a window: a feature whose old and new samples disagree is counted in BOTH the passing and the failing tile.",
       "panelTypes": "value",
       "query": {
         "id": "v-stg-fail-q",
@@ -2282,7 +2282,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_status{channel=\"staging\"}[7d]) == 0) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_status{channel=\"staging\"}[7d]) == 0)) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -2393,7 +2393,7 @@
     {
       "id": "v-stg-skipped",
       "title": "Skipped (staging)",
-      "description": "Features that did not run in the most recent staging run. Counts the LATEST run only: successive runs land on the same series per (feature, channel), so last_over_time returns one sample per feature, not one per feature per run.",
+      "description": "Features that did not run in the most recent staging run. Counts FEATURES, not series: the outer count wraps a `count by (feature)` so a feature is counted once even if several series carry it. With the data model fixed there is one series per (feature, channel) anyway; the dedup keeps the tile honest while older series are still inside the window, and after any future label change. Caveat during such a window: a feature whose old and new samples disagree is counted in BOTH the passing and the failing tile.",
       "panelTypes": "value",
       "query": {
         "id": "v-stg-skipped-q",
@@ -2401,7 +2401,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"staging\"}[7d]) == 1) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"staging\"}[7d]) == 1)) or vector(0)",
             "legend": "",
             "disabled": false
           }
@@ -2772,7 +2772,7 @@
     {
       "id": "v-known-skip",
       "title": "Intentional skips (expected 1: rcon)",
-      "description": "`rcon` is quarantined behind SYSTEMTEST_HEAVY: across runs 12-15 Minecraft (itzg, TYPE=PAPER) never reached a stable RUNNING within the 7-minute ready budget on a 4-vCPU GitHub-hosted runner, at ~20 minutes per attempt. RCON is therefore UNVERIFIED in CI — it is exercised only with SYSTEMTEST_HEAVY=1 locally or on a larger runner. Expected value: 1. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md Counts the LATEST run only: successive runs land on the same series per (feature, channel), so last_over_time returns one sample per feature, not one per feature per run.",
+      "description": "`rcon` is quarantined behind SYSTEMTEST_HEAVY: across runs 12-15 Minecraft (itzg, TYPE=PAPER) never reached a stable RUNNING within the 7-minute ready budget on a 4-vCPU GitHub-hosted runner, at ~20 minutes per attempt. RCON is therefore UNVERIFIED in CI — it is exercised only with SYSTEMTEST_HEAVY=1 locally or on a larger runner. Expected value: 1. https://github.com/Magenta-Mause/Cosy-Systemtest/blob/main/docs/KNOWN-ISSUES.md Counts FEATURES, not series: the outer count wraps a `count by (feature)` so a feature is counted once even if several series carry it. With the data model fixed there is one series per (feature, channel) anyway; the dedup keeps the tile honest while older series are still inside the window, and after any future label change. Caveat during such a window: a feature whose old and new samples disagree is counted in BOTH the passing and the failing tile.",
       "panelTypes": "value",
       "query": {
         "id": "v-known-skip-q",
@@ -2780,7 +2780,7 @@
         "promql": [
           {
             "name": "A",
-            "query": "count(last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\",feature=\"rcon\"}[26h]) == 1) or vector(0)",
+            "query": "count(count by (feature) (last_over_time(cosy_platform_systemtest_feature_skipped{channel=\"release\",feature=\"rcon\"}[26h]) == 1)) or vector(0)",
             "legend": "",
             "disabled": false
           }
