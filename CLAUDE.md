@@ -104,10 +104,20 @@ failed push of *either* exits **1** (see convention 8).
     `frontend_tag` / `config_ref` dispatch inputs are forwarded to `install_cosy.sh`
     only when non-empty; the effective tags are then read back from the installed
     `.env` into `summary.json` (`versions`), and any override flips `channel` to
-    `staging`. The same values ride along as OTLP resource attributes
-    (`cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_url`),
-    so a data point in SigNoz names its build and its run. Never drop those fields —
-    a red row is meaningless without them.
+    `staging`. The same values ride along on **`cosy_platform_systemtest_run_info`**
+    (`cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_url`,
+    `…report_url`, `…trace_id`, `…run_at`) and on the **trace's** resource, so a run in
+    SigNoz names its build and its run. Never drop those fields — a red row is
+    meaningless without them.
+    **Run-varying labels must stay OFF the per-feature metrics.** SigNoz materialises
+    resource attributes as series labels, so a label that changes per run gives every
+    run its own series, and then: `last_over_time(...[26h])` returns one sample per RUN
+    instead of the latest run's (the count tiles read feature × run — 32 "failing" for
+    ~5 red features over 6 runs), and `count_over_time(...) >= 2` can never be satisfied,
+    which meant `CosySystemtestFeatureFailing` was structurally unable to fire. The
+    per-feature metrics therefore carry ONLY `feature` + `channel`, and the metrics'
+    resource carries only `service.name` + `deployment.environment`. If you need a new
+    run-level dimension, add it to `run_info`, never to a feature metric.
 12. **Every metric name starts with `cosy_platform_systemtest_`.** The shorter
     `cosy_systemtest_*` namespace is already taken in the same SigNoz instance by the
     **Cosy Domain Provider** systemtest (a different product; it reaches SigNoz via
@@ -123,7 +133,9 @@ failed push of *either* exits **1** (see convention 8).
     per day and Prometheus' 5-minute lookback would otherwise blank the dashboard
     minutes after a run. Alert rules live in the cluster deployment repo under
     `infrastructure/signoz-alerts/`. The "Runs in window" table is the drill-down panel:
-    it groups by `cosy.systemtest.trace_id` and carries a SigNoz context link
+    it is backed by `cosy_platform_systemtest_run_info` — the only metric carrying
+    run-level labels, see convention 11 — groups by `cosy.systemtest.trace_id` and
+    carries a SigNoz context link
     (`contextLinks.linksData`, url `/trace/{{_cosy.systemtest.trace_id}}`) — do not drop
     either, they are the only path from the dashboard into a run's trace. See the
     README's "The SigNoz dashboard" section. Its **first** groupBy entry is

@@ -87,6 +87,7 @@ const METRIC = {
   featureDuration: 'cosy_platform_systemtest_feature_duration_seconds',
   runSuccess: 'cosy_platform_systemtest_run_success',
   lastRunTimestamp: 'cosy_platform_systemtest_last_run_timestamp_seconds',
+  runInfo: 'cosy_platform_systemtest_run_info',
 } as const;
 
 type FeatureStatus = 'passed' | 'failed' | 'skipped';
@@ -497,18 +498,24 @@ function gauge(
 }
 
 /**
- * Attributes that describe WHAT was tested, not which feature — so every data
- * point is attributable to a build and to the run that produced it (see the
- * "a result must be attributable to a build" convention in CLAUDE.md).
- * Image tags and run URL change per run, so each run adds one series per metric;
- * at one nightly run that is a bounded, deliberate cost.
+ * Attributes that describe WHAT was tested and WHICH run produced it.
  *
- * `cosy.systemtest.trace_id` is the same on the metrics and on the trace, which is
- * the whole point: the dashboard's run table groups by it, so a row there can link
- * into `/trace/<id>` in SigNoz. It shares the run URL's cardinality profile (one new
- * value per run), so it costs nothing that was not already being paid.
+ * TRACES ONLY. These belong on the trace, where per-run identity IS the point: a
+ * trace is one run by definition, so run-varying labels cost nothing there.
+ *
+ * They must NOT go on the metrics' resource. Every one of `trace_id`, `run_at`,
+ * `run_url`, `report_url` (and `image_tag` on a release boundary) takes a new value
+ * per run, and SigNoz materialises resource attributes as series labels — so each run
+ * would land on its OWN series. That breaks every cross-run query:
+ *   - `last_over_time(...[26h])` returns one sample PER RUN instead of the latest
+ *     run's, so the dashboard's count tiles read feature × run (32 "failing" for
+ *     ~5 red features over 6 runs);
+ *   - `count_over_time(...) >= 2` can never be satisfied — one run writes exactly one
+ *     sample per series — so `CosySystemtestFeatureFailing` could never fire at all.
+ * The run-level labels live on {@link METRIC.runInfo} instead, which is what the
+ * dashboard's run table groups by. See CLAUDE.md conventions 11 and 13.
  */
-function resourceAttributes(summary: Summary, traceId: string): OtlpAttribute[] {
+function traceResourceAttributes(summary: Summary, traceId: string): OtlpAttribute[] {
   const attributes = [
     attribute('service.name', SERVICE_NAME),
     // House convention is a prod/staging split via `deployment.environment`; here
@@ -535,6 +542,22 @@ function resourceAttributes(summary: Summary, traceId: string): OtlpAttribute[] 
 }
 
 /**
+ * Resource attributes for the METRICS — deliberately only the ones that are stable
+ * across runs, so successive runs append to the SAME series per (feature, channel)
+ * and `last_over_time` genuinely means "the latest run". Anything run-varying goes on
+ * {@link METRIC.runInfo} as a data-point attribute instead.
+ */
+function metricsResourceAttributes(summary: Summary): OtlpAttribute[] {
+  return [
+    attribute('service.name', SERVICE_NAME),
+    // House convention is a prod/staging split via `deployment.environment`; here
+    // the channel IS the environment (`release` = the published product). Stable per
+    // channel, so it does not fragment the series.
+    attribute('deployment.environment', summary.channel),
+  ];
+}
+
+/**
  * Build the OTLP payload for one run.
  *
  * How `skipped` is represented — deliberately, because reporting a skip as a pass
@@ -555,6 +578,29 @@ export function buildMetricsPayload(summary: Summary, traceId: string): OtlpPayl
     attribute('feature', feature),
     ...channelAttributes,
   ];
+  /**
+   * The run's identity, as DATA-POINT attributes on `run_info` only. Deliberately
+   * kept off every per-feature metric: these take a new value per run, and a
+   * run-varying label makes each run its own series, which is exactly what stops
+   * `last_over_time` from meaning "the latest run".
+   */
+  const runAttributes: OtlpAttribute[] = [
+    ...channelAttributes,
+    attribute('cosy.backend.image_tag', summary.versions.backend ?? 'unknown'),
+    attribute('cosy.frontend.image_tag', summary.versions.frontend ?? 'unknown'),
+    attribute('cosy.systemtest.trace_id', traceId),
+    // Fixed-width ISO 8601 UTC: the run table's timestamp column AND its sort key,
+    // because such a string sorts lexicographically in exactly chronological order.
+    attribute('cosy.systemtest.run_at', isoSeconds(Date.parse(summary.generatedAt))),
+  ];
+  // Absent outside GitHub Actions — omit rather than invent a placeholder link.
+  if (summary.runUrl) {
+    runAttributes.push(attribute('cosy.systemtest.run_url', summary.runUrl));
+  }
+  if (summary.reportUrl) {
+    runAttributes.push(attribute('cosy.systemtest.report_url', summary.reportUrl));
+  }
+
   const executed = summary.features.filter((f) => f.status !== 'skipped');
   const anyFailed = summary.features.some((f) => f.status === 'failed');
 
@@ -603,12 +649,20 @@ export function buildMetricsPayload(summary: Summary, traceId: string): OtlpPayl
       's',
       [{ attributes: channelAttributes, timeUnixNano, asDouble: Math.floor(observedAtMs / 1000) }],
     ),
+    gauge(
+      METRIC.runInfo,
+      'Always 1. Carries the run-level labels (image tags, run/report URL, trace id, ' +
+        'run timestamp) that must NOT sit on the per-feature metrics, where they would ' +
+        'give every run its own series. This is what the dashboard run table groups by.',
+      '1',
+      [{ attributes: runAttributes, timeUnixNano, asInt: '1' }],
+    ),
   ];
 
   return {
     resourceMetrics: [
       {
-        resource: { attributes: resourceAttributes(summary, traceId) },
+        resource: { attributes: metricsResourceAttributes(summary) },
         // A metric with no data points carries no information; drop it (happens
         // when literally every feature skipped, e.g. a local run with no install).
         scopeMetrics: [
@@ -814,7 +868,7 @@ export function buildTracePayload(summary: Summary, traceId: string): OtlpTraceP
       {
         // Identical to the metrics' resource, so both signals describe the same
         // run of the same service and SigNoz can relate them.
-        resource: { attributes: resourceAttributes(summary, traceId) },
+        resource: { attributes: traceResourceAttributes(summary, traceId) },
         scopeSpans: [{ scope: { name: SCOPE_NAME }, spans: [rootSpan, ...featureSpans] }],
       },
     ],

@@ -202,6 +202,26 @@ All five metrics are gauges, written once per run:
 | `cosy_platform_systemtest_feature_duration_seconds` | `feature`, `channel` | Wall-clock seconds; skipped features are absent |
 | `cosy_platform_systemtest_run_success` | `channel` | `1` if no feature failed, else `0` |
 | `cosy_platform_systemtest_last_run_timestamp_seconds` | `channel` | Unix time of the run — the staleness signal |
+| `cosy_platform_systemtest_run_info` | `channel`, `cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_at` / `…run_url` / `…report_url` / `…trace_id` | Always `1`. Carries the run-level labels; backs the "Runs in window" table |
+
+**Run-level labels live on `run_info` only — never on a per-feature metric.** SigNoz
+materialises attributes as series labels, so a label that changes per run (a trace id, a
+run URL, an image tag across a release) gives every run its **own series**. Two things
+then break, both silently:
+
+- `last_over_time(...[26h])` returns one sample **per run** rather than the latest run's,
+  so the dashboard's count tiles read *feature × run* — 32 "failing" for ~5 red features
+  across 6 runs.
+- `count_over_time(...) >= 2` can never be satisfied, because one run writes exactly one
+  sample per series. That is the "two consecutive runs" clause in
+  `CosySystemtestFeatureFailing`, which therefore could not fire **at all**.
+
+Hence the split: per-feature metrics carry only `feature` + `channel`, the metrics'
+resource carries only `service.name` + `deployment.environment`, and everything that
+identifies the run sits on `run_info` (and on the trace's resource, where per-run
+identity is the whole point). Successive runs then append to the same series, and
+`last_over_time` means what it says: **the latest run**.
+
 
 **Why the names start with `cosy_platform_`, not just `cosy_`.** The obvious
 `cosy_systemtest_*` namespace is already occupied in the same SigNoz instance by the
