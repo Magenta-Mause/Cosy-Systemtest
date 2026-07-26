@@ -391,6 +391,22 @@ name, which is how you end up with two half-maintained copies.
 **Export after any UI edit:** *⋮* → *Export JSON*, write it over `docs/signoz-dashboard.json`
 and commit it in the same change. A UI-only edit is a silent fork of this file.
 
+**Merging a PR that touches this file changes nothing on its own** — SigNoz reads its own
+database, not this repo. The *Update* step above is what applies it, and it is easy to
+forget because everything looks committed and done.
+
+**Order matters when a change also touches the metrics.** If a panel starts using a
+metric that the runner does not emit yet, apply it in this order:
+
+1. merge the code change,
+2. let one run push (nightly, or dispatch one manually),
+3. *then* update the dashboard JSON in SigNoz.
+
+Do it the other way round and the new panel is simply empty, which reads like a broken
+query rather than missing data. The reverse — updating the runner but not the dashboard —
+leaves the old panel querying a label that no longer exists, which reads as "no data" for
+the same reason.
+
 What is on it:
 
 | Section | Answers |
