@@ -1983,7 +1983,7 @@
               "stepInterval": 60,
               "aggregations": [
                 {
-                  "metricName": "cosy_platform_systemtest_run_success",
+                  "metricName": "cosy_platform_systemtest_run_info",
                   "temporality": "unspecified",
                   "timeAggregation": "latest",
                   "spaceAggregation": "max",
@@ -2041,18 +2041,7 @@
                   "order": "desc"
                 }
               ],
-              "selectColumns": [],
-              "aggregateAttribute": {
-                "key": "cosy_platform_systemtest_run_info",
-                "dataType": "float64",
-                "type": "Gauge",
-                "isColumn": true,
-                "isJSON": false
-              },
-              "aggregateOperator": "max",
-              "timeAggregation": "max",
-              "spaceAggregation": "max",
-              "reduceTo": "last"
+              "selectColumns": []
             }
           ],
           "queryFormulas": []

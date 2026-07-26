@@ -866,8 +866,10 @@ export function buildTracePayload(summary: Summary, traceId: string): OtlpTraceP
   return {
     resourceSpans: [
       {
-        // Identical to the metrics' resource, so both signals describe the same
-        // run of the same service and SigNoz can relate them.
+        // Deliberately RICHER than the metrics' resource (see
+        // `metricsResourceAttributes`): a trace is one run by definition, so per-run
+        // identity costs nothing here. `service.name` is shared, which is what lets
+        // SigNoz relate the two signals.
         resource: { attributes: traceResourceAttributes(summary, traceId) },
         scopeSpans: [{ scope: { name: SCOPE_NAME }, spans: [rootSpan, ...featureSpans] }],
       },

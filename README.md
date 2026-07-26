@@ -193,7 +193,7 @@ signals go out per run**, from the same `--push-only` step and sharing one trace
 
 ### Metrics
 
-All five metrics are gauges, written once per run:
+All six metrics are gauges, written once per run:
 
 | Metric | Attributes | Meaning |
 |---|---|---|
@@ -232,12 +232,14 @@ every panel and alert silently merges both, and a failure over there would page 
 this repo (or the reverse). `cosy_platform_` states the subject: the Cosy **game-server
 platform**. Keep the prefix on every metric added here — do not shorten it back.
 
-Resource attributes on every data point — and on every span of the run's trace:
-`service.name=cosy-systemtest`, `deployment.environment=<channel>`,
-`cosy.backend.image_tag`, `cosy.frontend.image_tag`, `cosy.systemtest.run_url`,
-`cosy.systemtest.report_url`, `cosy.systemtest.trace_id` and `cosy.systemtest.run_at` —
-so any point names the build it tested, links back to the GitHub run, opens the run's
-hosted HTML report (videos and traces included), names the SigNoz trace of the same run,
+The **metrics'** resource is deliberately minimal — `service.name=cosy-systemtest` and
+`deployment.environment=<channel>`, both stable across runs (see the note above on why).
+Everything identifying a run — `cosy.backend.image_tag`, `cosy.frontend.image_tag`,
+`cosy.systemtest.run_url`, `…report_url`, `…trace_id`, `…run_at` — rides on
+`cosy_platform_systemtest_run_info` as data-point attributes, and on **every span of the
+run's trace** as resource attributes, where per-run identity is the whole point.
+Between them a run still names the build it tested, links back to the GitHub run, opens
+the run's hosted HTML report (videos and traces included), names the SigNoz trace of the same run,
 and says when the run reported.
 
 `cosy.systemtest.run_at` is `summary.generatedAt` (the moment the summary was written,
@@ -332,8 +334,8 @@ https://systemtest-reports.jannekeipert.de/<channel>/<github-run-id>/index.html
 `deployment.environment`); `<github-run-id>` is the id already inside
 `cosy.systemtest.run_url`, so the two links reproduce one another by hand. The runner
 puts the full URL in `results/summary.json` (`reportUrl`) and pushes it as the
-`cosy.systemtest.report_url` resource attribute, which the dashboard's **"Runs in
-window"** table shows as a column and offers as the **"Watch this run's report"**
+`cosy.systemtest.report_url` attribute on `cosy_platform_systemtest_run_info`, which the
+dashboard's **"Runs in window"** table shows as a column and offers as the **"Watch this run's report"**
 context link.
 
 The URL is **derived**, not reported back from the upload: `buildReportUrl()` composes
@@ -419,8 +421,8 @@ What is on it:
 | Known expected skips | The one intentional skip (`rcon`), stated explicitly rather than left to look like breakage |
 
 **From the dashboard to the run's trace.** The "Runs in window" table groups by
-`cosy.systemtest.trace_id` (a resource attribute the runner puts on the metrics, holding
-the id of the trace the same run emitted) and carries a SigNoz **context link**:
+`cosy.systemtest.trace_id` (an attribute the runner puts on
+`cosy_platform_systemtest_run_info`, holding the id of the trace the same run emitted) and carries a SigNoz **context link**:
 click a row → *Open this run's trace* → `/trace/{{_cosy.systemtest.trace_id}}`, i.e. the
 trace-detail page of that exact run. The id is also visible as a column, so it works by
 copy-paste when the context menu is not available. Context links are a v5-dashboard

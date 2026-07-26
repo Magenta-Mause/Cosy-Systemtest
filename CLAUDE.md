@@ -188,7 +188,8 @@ failed push of *either* exits **1** (see convention 8).
     `s3://cosy-systemtest-reports/<channel>/<github-run-id>/`, and
     `buildReportUrl()` independently composes
     `${REPORTS_BASE_URL}/<channel>/<GITHUB_RUN_ID>/index.html` for `summary.json`'s
-    `reportUrl` → the `cosy.systemtest.report_url` resource attribute. **Nothing
+    `reportUrl` → the `cosy.systemtest.report_url` attribute on
+    `cosy_platform_systemtest_run_info` (and on the trace's resource). **Nothing
     connects the two but this convention** — change one path and every dashboard link
     404s while looking perfectly healthy. If you change the layout, change both in the
     same commit. Keep `/index.html` in the URL (MinIO serves objects, not directories)
