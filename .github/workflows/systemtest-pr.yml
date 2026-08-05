@@ -1,0 +1,231 @@
+name: Systemtest PR
+
+# Merge gate for THIS repository: a change to the specs, page objects, fixtures or the
+# runner has to prove itself before it can red the nightly.
+#
+# The cheap one of the three gates. A frontend or backend PR must build its own image
+# first; here the subject under test is the suite itself, so by default it runs against
+# the pinned RELEASED images — exactly what the nightly installs. That is the right
+# baseline: if a page object stops matching the shipped UI, this is where it should be
+# caught, not at 02:30.
+#
+# It still resolves siblings in both product repos, because a spec change is very often
+# the other half of a feature (a new data-testid landing in Cosy-Frontend, say). When
+# one matches, that repo's branch is built and installed here too.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  workflow_dispatch:
+
+concurrency:
+  group: systemtest-pr-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  systemtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'systemtest-skip') }}
+
+    env:
+      BACKEND_IMAGE: ghcr.io/magenta-mause/cosy-backend
+      FRONTEND_IMAGE: ghcr.io/magenta-mause/cosy-frontend
+      HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      PR_BODY: ${{ github.event.pull_request.body }}
+
+    steps:
+      - name: Decide what this run covers
+        id: scope
+        env:
+          FULL_SUITE: ${{ contains(github.event.pull_request.labels.*.name, 'systemtest:full') }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          tag="pr-${PR_NUMBER:-manual-${GITHUB_RUN_ID}}-$(echo "$GITHUB_SHA" | cut -c1-7)"
+          echo "Image tag for any sibling built by this run: ${tag}"
+          echo "image-tag=${tag}" >> "$GITHUB_OUTPUT"
+
+          # A bash `if`, not `x && '' || '@core'`: an empty true-branch makes that
+          # expression idiom silently fall through to the false branch.
+          if [ "$FULL_SUITE" = "true" ]; then
+            echo "grep=" >> "$GITHUB_OUTPUT"
+            echo "scope=full" >> "$GITHUB_OUTPUT"
+            echo "Scope: full suite (systemtest:full label)"
+          else
+            echo "grep=@core" >> "$GITHUB_OUTPUT"
+            echo "scope=@core" >> "$GITHUB_OUTPUT"
+            echo "Scope: @core"
+          fi
+
+      - name: Checkout this pull request
+        uses: actions/checkout@v7
+
+      # The actions are local here — this repo owns them — so unlike the product repos
+      # there is no bootstrap problem and no cross-repo checkout. A PR that changes the
+      # resolver or the run action therefore tests its own new version, which is the
+      # point of gating this repository at all.
+      - name: Find the matching backend branch
+        id: backend
+        uses: ./.github/actions/resolve-sibling-ref
+        with:
+          sibling-repo: magenta-mause/cosy-backend
+          head-ref: ${{ env.HEAD_REF }}
+          override-key: Backend-Ref
+          pr-body: ${{ env.PR_BODY }}
+
+      - name: Find the matching frontend branch
+        id: frontend
+        uses: ./.github/actions/resolve-sibling-ref
+        with:
+          sibling-repo: Magenta-Mause/Cosy-Frontend
+          head-ref: ${{ env.HEAD_REF }}
+          override-key: Frontend-Ref
+          pr-body: ${{ env.PR_BODY }}
+
+      # Only set up Buildx when something will actually be built. Most PRs here touch
+      # only the suite and install the released images, so this is usually skipped.
+      - name: Set up Buildx
+        if: steps.backend.outputs.matched == 'true' || steps.frontend.outputs.matched == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Check out the matching backend
+        if: steps.backend.outputs.matched == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.backend.outputs.repository }}
+          ref: ${{ steps.backend.outputs.ref }}
+          path: backend
+
+      - name: Build the matching backend image
+        if: steps.backend.outputs.matched == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: backend
+          push: false
+          # See the product repos' workflows: without `load: true` the image never
+          # reaches the daemon and compose silently pulls the published one instead.
+          load: true
+          tags: ${{ env.BACKEND_IMAGE }}:${{ steps.scope.outputs.image-tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check out the matching frontend
+        if: steps.frontend.outputs.matched == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.frontend.outputs.repository }}
+          ref: ${{ steps.frontend.outputs.ref }}
+          path: frontend
+
+      - name: Build the matching frontend image
+        if: steps.frontend.outputs.matched == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: frontend
+          push: false
+          load: true
+          tags: ${{ env.FRONTEND_IMAGE }}:${{ steps.scope.outputs.image-tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Cosy and run the systemtest suite
+        id: run
+        uses: ./.github/actions/run-systemtest
+        with:
+          # Empty unless a sibling matched — an empty tag installs the pinned released
+          # image, which is this gate's normal and intended baseline.
+          backend-tag: ${{ steps.backend.outputs.matched == 'true' && steps.scope.outputs.image-tag || '' }}
+          frontend-tag: ${{ steps.frontend.outputs.matched == 'true' && steps.scope.outputs.image-tag || '' }}
+          config-ref: main
+          grep: ${{ steps.scope.outputs.grep }}
+          retries: "1"
+          fail-on-failure: "true"
+          # The image guards skip any tag that is empty, so this is safe to enable
+          # whenever ANY sibling was built and is a no-op when none was.
+          expect-image-tags: ${{ steps.backend.outputs.matched == 'true' || steps.frontend.outputs.matched == 'true' }}
+
+      # The authoritative gate — see the identical step in the product repos for why it
+      # lives in the workflow and not in the action. Here it matters even more: a PR to
+      # this repo can change the very action it is being gated by.
+      - name: Assert every expected feature ran and passed
+        if: always() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure')
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
+        run: |
+          summary=results/summary.json
+          if [ ! -f "$summary" ]; then
+            echo "::error::${summary} does not exist — the suite never produced a result. \
+          A missing result is a FAILURE here, because 'no evidence' must never read as \
+          'no problem'."
+            exit 1
+          fi
+
+          expected=(install auth console files server-create server-lifecycle uninstall)
+
+          rc=0
+          for feature in "${expected[@]}"; do
+            status="$(jq -r --arg f "$feature" \
+              '.features[] | select(.feature == $f) | .status' "$summary" | head -n 1)"
+            case "$status" in
+              passed) printf '  ok   %-18s passed\n' "$feature" ;;
+              "")     printf '  FAIL %-18s ABSENT from the summary\n' "$feature"; rc=1 ;;
+              *)      printf '  FAIL %-18s %s\n' "$feature" "$status"; rc=1 ;;
+            esac
+          done
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Not every expected @core feature ran and passed. ABSENT or \
+          SKIPPED counts as a failure: it means the gate verified nothing about it."
+            echo "Full summary:"
+            jq '.features' "$summary" || true
+          elif [ "$SCOPE" != "@core" ]; then
+            echo "Scope was '${SCOPE}'; the @core subset above is asserted by name and \
+          every other feature is covered by the runner's --fail-on-failure."
+          fi
+          exit "$rc"
+
+      - name: Upload systemtest report
+        if: always() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: systemtest-pr-${{ github.event.pull_request.number || github.run_id }}
+          path: |
+            playwright-report/
+            results/
+            test-results/
+          retention-days: 7
+
+  systemtest-gate:
+    if: always()
+    needs: [systemtest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verdict
+        env:
+          RESULT: ${{ needs.systemtest.result }}
+          SKIP_LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'systemtest-skip') }}
+        run: |
+          echo "systemtest job result: ${RESULT}"
+          case "$RESULT" in
+            success)
+              echo "Systemtest passed."
+              ;;
+            skipped)
+              if [ "$SKIP_LABELLED" = "true" ]; then
+                echo "::warning::Systemtest was SKIPPED via the 'systemtest-skip' label. \
+          This pull request has NOT been verified end to end."
+              else
+                echo "::error::The systemtest job was skipped for an unrecognised reason. \
+          Refusing to report green for a gate that did not run."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Systemtest ${RESULT}. See the job log and the uploaded report."
+              exit 1
+              ;;
+          esac
