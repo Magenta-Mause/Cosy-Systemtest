@@ -18,6 +18,15 @@
  *   - `--no-push`   run the suite and write the summary only.
  *   - `--push-only` push an existing `results/summary.json`; no Playwright.
  *
+ * Two further flags exist for the PR gates (docs/pr-gate.md), which run this same
+ * runner against a locally built PR image:
+ *   - `--grep <pattern>`    forwarded to Playwright, so a gate can run just `@core`.
+ *                           Rejected together with `--push-only`, where it would be
+ *                           silently ignored.
+ *   - `--fail-on-failure`   exit 1 when any feature failed — the deliberate opposite
+ *                           of the "metrics are truth" default below. A gate has to
+ *                           fail closed; the nightly must not.
+ *
  * Why the split: `uninstall` is asserted by the workflow AFTER the suite step and
  * appended to `results/summary.json` as an extra feature row. Pushing from inside
  * the suite step therefore reported 19 of 20 features — a dashboard that silently
@@ -26,7 +35,8 @@
  *
  * Semantics: "metrics are truth, exit 0". Test failures do NOT fail this process
  * — the per-feature results are the signal, and the dashboard/alerts decide what
- * is broken. The process exits non-zero ONLY on an infrastructure error:
+ * is broken. (`--fail-on-failure` is the one, explicit opt-out; without it nothing
+ * below changes.) The process exits non-zero ONLY on an infrastructure error:
  *   - Playwright could not produce a parseable report at all, or
  *   - `--push-only` found no usable `results/summary.json` to push, or
  *   - a telemetry push (metrics or trace) failed. A broken reporting path must not
@@ -162,7 +172,29 @@ interface PwReport {
   suites?: PwSuite[];
 }
 
-function runPlaywright(): number {
+/**
+ * Playwright's own CLI entry point, run directly with `node` instead of through `npx`.
+ *
+ * Three reasons, in order of how much they hurt:
+ *
+ *  1. `spawnSync('npx', …)` without a shell fails with ENOENT on Windows, where the
+ *     executable is `npx.cmd`. `npm run systemtest` therefore never worked there at
+ *     all — it died with "Playwright produced no JSON report", which reads like a
+ *     Playwright problem and is not one.
+ *  2. The obvious repair, `shell: true`, trades that for a quoting bug: the argv is
+ *     flattened into one `cmd.exe` string, so a `--grep` pattern containing `|` —
+ *     `@core|@extended` is an ordinary Playwright tag expression — would be split as a
+ *     shell pipe. Spawning a real executable keeps every argument a separate argv
+ *     entry, which is what the `--grep` handling below relies on.
+ *  3. It runs the `@playwright/test` pinned in this repo's lockfile rather than
+ *     whatever `npx` decides to resolve (or fetch).
+ *
+ * `require.resolve` is available because this package is CommonJS ("type":
+ * "commonjs"); `./cli` is a declared export of @playwright/test.
+ */
+const PLAYWRIGHT_CLI = require.resolve('@playwright/test/cli');
+
+function runPlaywright(grep?: string): number {
   fs.mkdirSync(RESULTS_DIR, { recursive: true });
   fs.rmSync(JSON_REPORT, { force: true });
 
@@ -171,7 +203,12 @@ function runPlaywright(): number {
   const reporters = ['list', 'html', 'json'];
   if (process.env.CI) reporters.push('github');
 
-  const run = spawnSync('npx', ['playwright', 'test', `--reporter=${reporters.join(',')}`], {
+  const args = [PLAYWRIGHT_CLI, 'test', `--reporter=${reporters.join(',')}`];
+  // `--grep` is passed as two argv entries, never interpolated into a shell string:
+  // the pattern is a regex that routinely contains characters a shell would eat.
+  if (grep) args.push('--grep', grep);
+
+  const run = spawnSync(process.execPath, args, {
     stdio: ['ignore', 'inherit', 'inherit'],
     env: { ...process.env, PLAYWRIGHT_JSON_OUTPUT_NAME: JSON_REPORT },
   });
@@ -1064,34 +1101,68 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const USAGE = 'usage: run-systemtest.ts [--no-push | --push-only]';
+const USAGE =
+  'usage: run-systemtest.ts [--no-push | --push-only] [--grep <pattern>] [--fail-on-failure]';
 
 interface Options {
   /** Run Playwright and write the summary (false only for `--push-only`). */
   runTests: boolean;
   /** Attempt the OTLP push (false only for `--no-push`). */
   push: boolean;
+  /** Playwright `--grep` tag expression, e.g. `@core`. Undefined runs the whole suite. */
+  grep?: string;
+  /** Exit non-zero when any feature failed — opts OUT of "metrics are truth". */
+  failOnFailure: boolean;
 }
 
 function parseOptions(argv: string[]): Options {
   const flags = argv.slice(2);
-  const unknown = flags.filter((flag) => flag !== '--no-push' && flag !== '--push-only');
-  if (unknown.length > 0) {
-    console.error(`Unknown argument(s): ${unknown.join(', ')}\n${USAGE}`);
-    process.exit(2);
+  let pushOnly = false;
+  let noPush = false;
+  let grep: string | undefined;
+  let failOnFailure = false;
+
+  for (let i = 0; i < flags.length; i++) {
+    const flag = flags[i];
+    if (flag === '--push-only') {
+      pushOnly = true;
+    } else if (flag === '--no-push') {
+      noPush = true;
+    } else if (flag === '--fail-on-failure') {
+      failOnFailure = true;
+    } else if (flag === '--grep' || flag.startsWith('--grep=')) {
+      const value = flag.startsWith('--grep=') ? flag.slice('--grep='.length) : flags[++i];
+      // An empty pattern would match everything, silently turning a `@core` gate into
+      // the full suite. Refuse rather than run the wrong thing for 40 minutes.
+      if (!value) {
+        console.error(`--grep requires a non-empty pattern.\n${USAGE}`);
+        process.exit(2);
+      }
+      grep = value;
+    } else {
+      console.error(`Unknown argument(s): ${flag}\n${USAGE}`);
+      process.exit(2);
+    }
   }
-  const pushOnly = flags.includes('--push-only');
-  const noPush = flags.includes('--no-push');
+
   if (pushOnly && noPush) {
     console.error(`--push-only and --no-push are mutually exclusive.\n${USAGE}`);
     process.exit(2);
   }
-  return { runTests: !pushOnly, push: !noPush };
+  // `--push-only` runs no Playwright, so a `--grep` there would be silently ignored —
+  // and "my gate ran the wrong subset and nobody noticed" is precisely the class of
+  // bug this flag exists to avoid. Make it a hard error instead.
+  if (pushOnly && grep) {
+    console.error(`--grep has no effect with --push-only (no suite runs).\n${USAGE}`);
+    process.exit(2);
+  }
+
+  return { runTests: !pushOnly, push: !noPush, grep, failOnFailure };
 }
 
 /** Run the suite and write `results/summary.json` — the artifact-bearing half. */
-function runSuiteAndWriteSummary(): Summary {
-  const pwExit = runPlaywright();
+function runSuiteAndWriteSummary(grep?: string): Summary {
+  const pwExit = runPlaywright(grep);
 
   if (!fs.existsSync(JSON_REPORT)) {
     console.error(
@@ -1155,17 +1226,63 @@ function loadSummaryForPush(): Summary {
   }
 }
 
+/**
+ * The single exit point for a run that got as far as producing a summary.
+ *
+ * Default (`--fail-on-failure` absent) is convention 8: metrics are truth, red
+ * features exit 0, and only infrastructure errors are non-zero. The nightly relies on
+ * that — a red feature must still reach the dashboard rather than killing the job
+ * before the push step.
+ *
+ * `--fail-on-failure` opts out, for the PR gates. It is a flag rather than a `--mode
+ * release|pr` string on purpose: a mistyped or defaulted mode string would silently
+ * turn a blocking check into a no-op that looks perfectly healthy in the log, whereas
+ * forgetting a flag can only produce a false GREEN in the one place we have a second,
+ * independent check for it — the caller workflow's allowlist assertion over
+ * `summary.json`, which is the authoritative gate. See docs/pr-gate.md.
+ *
+ * Note what this does NOT catch, deliberately: a feature that fails and then passes on
+ * retry is Playwright `flaky`, which `parseReport` records as `passed`. PR runs set
+ * `SYSTEMTEST_RETRIES=1`, so the gate tolerates exactly one flake per test by design —
+ * a 30-minute gate that reds on a single transient blip gets switched off. A feature
+ * that is *skipped* is likewise not a failure here; the caller's allowlist is what
+ * turns "all six specs skipped because the install died" into a red.
+ */
+function exitWithVerdict(summary: Summary, options: Options): never {
+  if (!options.failOnFailure) {
+    console.log('Exiting 0 regardless of feature outcomes (metrics are truth).');
+    process.exit(0);
+  }
+
+  const failed = summary.features.filter((f) => f.status === 'failed');
+  if (failed.length === 0) {
+    console.log(
+      `--fail-on-failure: no feature failed (${summary.features.length} recorded). Exiting 0.`,
+    );
+    process.exit(0);
+  }
+
+  console.error(
+    `::error::--fail-on-failure: ${failed.length} feature(s) FAILED — ` +
+      `${failed.map((f) => f.feature).join(', ')}. This is a product failure, not an ` +
+      `infrastructure one: open the Playwright report artifact for the video and trace.`,
+  );
+  process.exit(1);
+}
+
 async function main(): Promise<void> {
   const options = parseOptions(process.argv);
-  const summary = options.runTests ? runSuiteAndWriteSummary() : loadSummaryForPush();
+  const summary = options.runTests
+    ? runSuiteAndWriteSummary(options.grep)
+    : loadSummaryForPush();
 
   if (!options.push) {
     console.log(
       '\nINFO: --no-push — results written, nothing pushed (no metrics, no trace). In CI the ' +
         'push runs in a later step, after the workflow appended the `uninstall` row; see ' +
-        '.github/workflows/systemtest.yml.',
+        '.github/workflows/systemtest.yml. (PR gate runs never push at all — docs/pr-gate.md.)',
     );
-    process.exit(0);
+    exitWithVerdict(summary, options);
   }
 
   try {
@@ -1184,9 +1301,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Metrics-are-truth: never fail the process on red features.
-  console.log('Exiting 0 regardless of feature outcomes (metrics are truth).');
-  process.exit(0);
+  exitWithVerdict(summary, options);
 }
 
 function buildRunUrl(): string | null {
