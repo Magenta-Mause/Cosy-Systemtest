@@ -227,6 +227,24 @@ Keeping it in the **caller** rather than the shared action means it survives a m
 `grep`, a flipped `fail-on-failure`, and anyone later "simplifying" the action. A gate
 should not have a single point of failure that one typo can switch off.
 
+## What it actually costs
+
+Measured on the first real runs, not estimated:
+
+| Run | Wall clock | What it did |
+|---|---|---|
+| Nightly (release, whole suite) | **~5 min** | ~45 s install, 3.0 min for 21 tests |
+| This repo's gate (`@core` + both siblings built) | **~9 min** | |
+| Backend gate (`@core`, own image + frontend sibling) | **~10 min** | cold buildx cache |
+
+Far cheaper than the 25-40 min the workflow used to claim, which dated from before the
+Docker event-stream wedge was diagnosed and specs sat in 300 s retry loops. The practical
+consequence: **`@core` is not the cost saving it was designed to be** — the full suite
+adds only a couple of minutes. Keep the default anyway, because the extra `@extended`
+specs depend on hosted third-party services (`templates`, `games-search`) and a merge
+should not block on someone else's outage. But if that changes, revisit the default
+rather than assuming the old numbers.
+
 ## Known gaps
 
 - **A flaky pass counts as a pass.** With `retries: 1`, a spec that fails and then

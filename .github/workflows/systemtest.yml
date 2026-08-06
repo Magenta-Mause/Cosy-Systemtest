@@ -48,7 +48,11 @@ concurrency:
 jobs:
   systemtest:
     runs-on: ubuntu-latest
-    # Whole job budget; a healthy run is ~25-40 min, install + pull included.
+    # Whole job budget. A healthy run measured ~5 min end to end (run 31057482379:
+    # ~45 s install, 3.0 min for all 21 tests, 20 passed / 1 skipped), so the 60 is
+    # headroom for a bad night, not the expected cost. The old "~25-40 min" note here
+    # dated from before the event-stream wedge was diagnosed, when specs sat in 300 s
+    # retry loops; see docs/KNOWN-ISSUES.md.
     timeout-minutes: 60
 
     env:
