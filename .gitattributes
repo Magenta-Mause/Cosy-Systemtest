@@ -1,0 +1,14 @@
+# Shell scripts and CI definitions MUST reach the runner with LF endings.
+#
+# This does not depend on a contributor's core.autocrlf: a checkout on Windows with
+# autocrlf=false commits CRLF verbatim, and a CRLF resolve.sh then fails on the Ubuntu
+# runner with `$'\r': command not found` — an error that names neither the file nor the
+# real cause. Pinning `eol=lf` makes the working copy LF everywhere too.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# The suite and its tooling run on Linux CI; keep them byte-identical there.
+*.ts text eol=lf
+*.json text eol=lf
+*.md text eol=lf

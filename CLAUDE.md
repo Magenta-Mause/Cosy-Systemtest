@@ -15,6 +15,7 @@ npm run typecheck    # tsc --noEmit
 npm run systemtest   # runner → results/summary.json + push metrics & trace (exits 0 even on red tests)
 npm run systemtest:nopush  # same, but write only — no OTLP push (what CI's suite step runs)
 npm run systemtest:push    # push an existing results/summary.json (metrics + trace); runs no tests
+npx tsx scripts/run-systemtest.ts --no-push --grep @core --fail-on-failure   # what a PR gate runs
 npm run report       # open last HTML report
 npx playwright test --list   # lists all specs even with no install present
 ```
@@ -28,7 +29,10 @@ npx playwright test --list   # lists all specs even with no install present
 | `INSTALL_DIR` | Install dir; `.env` fallback read from `${INSTALL_DIR}/config/.env` | `/opt/cosy` |
 | `INSTALL_ENV_FILE` | Runner-readable copy of the installed `.env` (preferred over `INSTALL_DIR`; CI copies it because the installed file is root-owned chmod 600) | — (falls back to `INSTALL_DIR`) |
 | `SYSTEMTEST_HEAVY` | Enables quarantined heavy specs (`rcon` — needs a full Minecraft boot, never succeeds on a GitHub runner; see docs/KNOWN-ISSUES.md) | — (heavy specs skip) |
-| `COSY_CHANNEL` | Channel label in `results/summary.json`; the workflow sets `staging` when a manual run pinned an image tag, else `release` | `release` |
+| `SYSTEMTEST_RETRIES` | Overrides Playwright `retries`. PR gates set `1` (see docs/pr-gate.md); an unparseable or negative value is a hard error, never a silent fallback | — (2 on CI, 0 locally) |
+| `COSY_CHANNEL` | Channel label in `results/summary.json`; the workflow sets `staging` when a manual run pinned an image tag, else `release`. The PR gates override it to `pr` (convention 17) — every release panel and alert pins `channel="release"`, which is what keeps the two apart | `release` |
+| `COSY_PR_URL` | Pull request a `channel=pr` run gated → `cosy.systemtest.pr_url` on **`run_info` only** (convention 11). Without it a row in the PR table is a bare GitHub run id | — (omitted) |
+| `SYSTEMTEST_REPORT_PUBLISHED` | `false` suppresses the derived `reportUrl`. PR runs keep their report as a GitHub artifact, and a URL for a report nobody published is a permanent 404 on the dashboard | `true` |
 | `COSY_BACKEND_TAG` | Installed backend image tag, written to `summary.json` → `versions.backend` (workflow reads it back out of the installed `.env`) | — (`null` in the summary) |
 | `COSY_FRONTEND_TAG` | Installed frontend image tag → `versions.frontend` | — (`null` in the summary) |
 | `OTEL_INGEST_URL` | Base URL of the authenticated OTLP-HTTP ingest (SigNoz collector); the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics` **and** `${OTEL_INGEST_URL}/v1/traces`. CI sets `https://otel-ingest.jannekeipert.de` (overridable via the `OTEL_INGEST_URL` repo variable) | — (push skipped) |
@@ -82,6 +86,15 @@ failed push of *either* exits **1** (see convention 8).
    **Writing and pushing are separate modes:** `--no-push` (run + write only) and
    `--push-only` (push an existing summary, no Playwright); no flag = both, the local
    default. CI runs them as two steps — see convention 10.
+   **`--fail-on-failure` is the one explicit opt-out**, used only by the PR gates
+   (convention 17), which must fail closed. It is a boolean flag and not a
+   `--mode release|pr` string on purpose: a mistyped or defaulted mode string turns a
+   blocking check into a no-op whose log looks perfectly healthy, whereas a forgotten
+   flag can only produce a false green in the one place there is a second, independent
+   check for it. Never make it the default, and never make the nightly pass it.
+   **`--grep <pattern>`** forwards a tag expression to Playwright so a gate can run a
+   subset; it is rejected together with `--push-only`, where it would silently do
+   nothing.
 9. **Never report a skip as a pass.** A skipped feature is omitted from
    `cosy_platform_systemtest_feature_status` and
    `cosy_platform_systemtest_feature_duration_seconds` (a `0` duration would read as
@@ -92,8 +105,10 @@ failed push of *either* exits **1** (see convention 8).
    without the skipped gauge. If you add a metric, keep this rule: absence of evidence
    is never reported as evidence of health.
 10. **Install/uninstall belong to the workflow**, not to Playwright. `uninstall` is a
-    workflow-appended row in `results/summary.json`, not a spec. **The push therefore
-    comes last:** the suite step runs `--no-push`, the teardown assertion appends the
+    row appended by `.github/actions/run-systemtest` (the composite action that owns
+    install → suite → teardown, shared with the PR gates — convention 17), not a spec.
+    **The push therefore comes last:** the suite step runs `--no-push`, the teardown
+    assertion appends the
     `uninstall` row, and a separate `if: always()` step then runs `--push-only`, so
     SigNoz and the artifact show the same matrix. Never move the push back into the
     suite step — that reported 19 of 20 features and made the dashboard lie. The
@@ -151,7 +166,12 @@ failed push of *either* exits **1** (see convention 8).
     sort this table on `cosy.systemtest.run_url` again — that ordered correctly only
     while GitHub run ids happened to be equal-width and monotonic. It also groups by
     `cosy.systemtest.report_url` and carries the matching "Watch this run's report"
-    context link — see convention 16.
+    context link — see convention 16. It now also filters `channel != "pr"`: the PR
+    gates run roughly ten times a day against the nightly's one, and would otherwise
+    bury the row this table exists to show. Their own table (`t-pr-runs`, filtered
+    `channel = "pr"`, grouped additionally by `cosy.systemtest.pr_url`) sits in the "PR
+    gate" row at the bottom — see convention 17 for why that section is a table and not
+    a set of tiles.
 14. **One run = one trace, and a skip is never a green span.** The same `--push-only`
     step that pushes the metrics also POSTs one OTLP trace to `/v1/traces`: a root span
     `cosy-systemtest run (<channel>)` (ERROR if any feature failed, attributes
@@ -212,6 +232,49 @@ failed push of *either* exits **1** (see convention 8).
       `PutObject` into that one bucket and nothing else — do not "fix" a permission
       error by widening it; expiry is the server's job, never CI's.
 
+17. **The PR gate fails closed, and the nightly does not.** Three repositories gate
+    their pull requests on this suite (Cosy-Frontend, cosy-backend, and this one) by
+    calling `.github/actions/run-systemtest` — the composite action that owns
+    install → suite → diagnostics → uninstall → teardown assertion. Read
+    [docs/pr-gate.md](docs/pr-gate.md) before touching any of it. The rules that are
+    easy to break by "simplifying":
+    - **PR runs push under `channel="pr"`, and publish NO hosted report.** That is safe
+      only because every release panel and all four alert rules pin `channel="release"`
+      explicitly — `CosySystemtestStale` included, so frequent PR runs cannot mask a
+      dead nightly. **Never add a panel or rule that omits the channel filter.** The
+      push is `continue-on-error` in the gates (telemetry must not decide whether a PR
+      merges) and lives in the *caller* workflows, never in the action: composite
+      actions get no secrets automatically, and the action must stay provably
+      secret-free because it runs fork-authored Dockerfiles. `report-published: false`
+      suppresses the derived report URL — deriving one for a report nobody published
+      puts a permanent 404 on the dashboard.
+    - **The PR dashboard section is a run TABLE, not pass/fail tiles.** Per-feature
+      metrics carry only `feature` + `channel`, so they cannot distinguish one pull
+      request from another; a `last_over_time` tile over `channel="pr"` would blend
+      unrelated PRs and show whichever finished last. Per-feature detail for a single
+      run comes from its trace. `cosy.systemtest.pr_url` rides on `run_info` only.
+    - **The gate's authoritative check is the caller's `jq` allowlist** over
+      `results/summary.json`, not `--fail-on-failure`. All six `@core` specs skip
+      themselves when `INSTALL_LOG` is unset, so a dead install yields six skips, a
+      green Playwright, a green runner and a green job — verified, not hypothetical.
+      Only "every expected feature is present AND passed" catches it. Keep it in the
+      caller workflows so it survives a refactor of the action.
+    - **PR images are built locally and never pushed.** Cosy's compose file sets no
+      `pull_policy`, so a locally tagged image wins. Three guards in the action assert
+      that (image present before install; installed `.env` names our tag; running
+      container has our image id) because each failure mode is otherwise GREEN. In
+      particular `docker/build-push-action` needs **`load: true`** — without it the
+      `docker-container` buildx driver leaves the image in the build cache and compose
+      quietly pulls the published one.
+    - **The required check is `systemtest-gate`, not `systemtest`.** A skipped job
+      reports nothing and a required check that never reports blocks the PR forever.
+      The gate job is green on success or on an *allowlisted* skip, red otherwise. Do
+      not add `paths` filters to the gate workflows, and do not make it green on any
+      skip.
+    - **Sibling resolution never guesses.** Ambiguity is a hard error naming the
+      PR-body override, because a silent fall back to `main` produces a green result
+      for a combination nobody chose.
+
 ## Layout
 
 ```
@@ -223,7 +286,10 @@ tests/fixtures/   custom test/expect, runsOnlyWithInstall, adminCreds/apiClient/
 tests/helpers/    install.ts (cred parsing), api.ts (typed client), constants.ts
                   (urls + timeouts), webhook-sink.ts (delivery sink + gateway discovery)
 scripts/          run-systemtest.ts
-.github/workflows/systemtest.yml
+.github/workflows/systemtest.yml       nightly release run (owns the MinIO + OTLP steps)
+.github/workflows/systemtest-pr.yml    this repo's own PR gate
+.github/actions/run-systemtest/        install → suite → teardown; shared by all four
+.github/actions/resolve-sibling-ref/   which sibling branch belongs to a PR (+ resolve.sh)
 ```
 
 ## Phase 2 conventions worth knowing
