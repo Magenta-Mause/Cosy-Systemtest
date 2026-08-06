@@ -114,17 +114,58 @@ Same action, different settings — and every difference is a deliberate inversi
 | `--config-ref` | installer default (the pinned **release** tag) | `main` |
 | Retries | 2 | 1 |
 | Red features | **exit 0** — metrics are truth | **exit 1** — `--fail-on-failure` |
-| SigNoz push | yes | **no** |
+| Channel | `release` / `staging` | **`pr`** |
+| SigNoz push | yes, and a failed push **reds the job** | yes, but `continue-on-error` |
 | Hosted report | yes (MinIO) | **no** — GitHub artifact only |
 | Concurrency | never cancels | newer push cancels the older run |
 
-**Why no telemetry from PR runs.** A `channel=pr` value would fork the metrics'
-`deployment.environment`, the report bucket prefix, and the trace root-span name, none of
-which `docs/signoz-dashboard.json` or the four alert rules know about. It would also give
-every PR run its own series, which is precisely the per-run-label failure convention 11
-exists to prevent. The MinIO publish and the OTLP push therefore stay in the nightly
-*workflow*, outside the shared action — which additionally keeps the action provably
-secret-free, worth having when it runs fork-authored Dockerfiles.
+### Telemetry from PR runs
+
+PR runs push to SigNoz under **`channel="pr"`**, so the gate's own history — flakiness,
+wall clock, which features go red on pull requests — is visible next to the nightly.
+
+This is safe only because **every release panel and every alert rule pins
+`channel="release"` explicitly** (the staging ones likewise). Verified against
+`docs/signoz-dashboard.json` and the four rules in
+`Janne6565/cluster-deployment:infrastructure/signoz-alerts/`. `CosySystemtestStale` is
+release-scoped in particular, so frequent PR runs **cannot** mask a nightly that stopped
+running. *Add a panel or rule that does not pin a channel and you reintroduce exactly
+that failure.*
+
+Three rules keep it honest:
+
+- **The push never gates a merge.** It is `continue-on-error: true` — the deliberate
+  opposite of the nightly, where the push *is* the signal and a failed push reds the job
+  (convention 8). Here the verdict is the allowlist assertion; telemetry must never
+  decide whether a pull request can merge.
+- **The push lives in the caller workflows, not the shared action.** Composite actions do
+  not receive secrets automatically, and keeping ingest credentials out of the action
+  keeps it provably secret-free — which matters because it runs fork-authored
+  Dockerfiles. Fork PRs get no secrets, so the runner skips the push with one INFO line
+  and exits 0; the gate is unaffected.
+- **No hosted report URL is derived** (`report-published: false`). A PR run keeps its
+  report as a GitHub artifact, and deriving a URL for a report nobody published would put
+  a permanent 404 on the dashboard, which reads as a broken upload rather than a choice.
+
+**Required secrets.** `OTEL_INGEST_USER` and `OTEL_INGEST_PASSWORD` must exist in each
+repo whose gate should report — they currently live only in Cosy-Systemtest, so the
+frontend and backend gates skip the push until they are added (an org-level secret covers
+all three at once). Nothing breaks meanwhile; those runs simply do not appear.
+
+### What you can and cannot see on the dashboard
+
+The PR section is a **run table**, not pass/fail tiles, and that is deliberate. The
+per-feature metrics carry only `feature` and `channel` (convention 11 — run-varying
+labels on them are what made the count tiles read feature × run), so they **cannot tell
+one pull request from another**. A `last_over_time` tile over `channel="pr"` would blend
+unrelated PRs and report whichever finished last, which is worse than no tile.
+
+So: the table gives one row per gate run with its pull request, the image pair it
+installed, and a link to its trace — and the **trace** carries the per-feature detail for
+that specific run. Table for "which runs happened", trace for "what happened in one".
+
+`cosy.systemtest.pr_url` is what makes a row placeable; without it a row is a bare GitHub
+run id. It is a run-level dimension, so it rides on `run_info` and nowhere else.
 
 **Why `--config-ref main`.** `install_cosy.sh` defaults `CONFIG_REF` to `COSY_TAG`, the
 last *release* tag — so without this the gate would test a PR against the released

@@ -30,7 +30,9 @@ npx playwright test --list   # lists all specs even with no install present
 | `INSTALL_ENV_FILE` | Runner-readable copy of the installed `.env` (preferred over `INSTALL_DIR`; CI copies it because the installed file is root-owned chmod 600) | — (falls back to `INSTALL_DIR`) |
 | `SYSTEMTEST_HEAVY` | Enables quarantined heavy specs (`rcon` — needs a full Minecraft boot, never succeeds on a GitHub runner; see docs/KNOWN-ISSUES.md) | — (heavy specs skip) |
 | `SYSTEMTEST_RETRIES` | Overrides Playwright `retries`. PR gates set `1` (see docs/pr-gate.md); an unparseable or negative value is a hard error, never a silent fallback | — (2 on CI, 0 locally) |
-| `COSY_CHANNEL` | Channel label in `results/summary.json`; the workflow sets `staging` when a manual run pinned an image tag, else `release` | `release` |
+| `COSY_CHANNEL` | Channel label in `results/summary.json`; the workflow sets `staging` when a manual run pinned an image tag, else `release`. The PR gates override it to `pr` (convention 17) — every release panel and alert pins `channel="release"`, which is what keeps the two apart | `release` |
+| `COSY_PR_URL` | Pull request a `channel=pr` run gated → `cosy.systemtest.pr_url` on **`run_info` only** (convention 11). Without it a row in the PR table is a bare GitHub run id | — (omitted) |
+| `SYSTEMTEST_REPORT_PUBLISHED` | `false` suppresses the derived `reportUrl`. PR runs keep their report as a GitHub artifact, and a URL for a report nobody published is a permanent 404 on the dashboard | `true` |
 | `COSY_BACKEND_TAG` | Installed backend image tag, written to `summary.json` → `versions.backend` (workflow reads it back out of the installed `.env`) | — (`null` in the summary) |
 | `COSY_FRONTEND_TAG` | Installed frontend image tag → `versions.frontend` | — (`null` in the summary) |
 | `OTEL_INGEST_URL` | Base URL of the authenticated OTLP-HTTP ingest (SigNoz collector); the runner POSTs to `${OTEL_INGEST_URL}/v1/metrics` **and** `${OTEL_INGEST_URL}/v1/traces`. CI sets `https://otel-ingest.jannekeipert.de` (overridable via the `OTEL_INGEST_URL` repo variable) | — (push skipped) |
@@ -164,7 +166,12 @@ failed push of *either* exits **1** (see convention 8).
     sort this table on `cosy.systemtest.run_url` again — that ordered correctly only
     while GitHub run ids happened to be equal-width and monotonic. It also groups by
     `cosy.systemtest.report_url` and carries the matching "Watch this run's report"
-    context link — see convention 16.
+    context link — see convention 16. It now also filters `channel != "pr"`: the PR
+    gates run roughly ten times a day against the nightly's one, and would otherwise
+    bury the row this table exists to show. Their own table (`t-pr-runs`, filtered
+    `channel = "pr"`, grouped additionally by `cosy.systemtest.pr_url`) sits in the "PR
+    gate" row at the bottom — see convention 17 for why that section is a table and not
+    a set of tiles.
 14. **One run = one trace, and a skip is never a green span.** The same `--push-only`
     step that pushes the metrics also POSTs one OTLP trace to `/v1/traces`: a root span
     `cosy-systemtest run (<channel>)` (ERROR if any feature failed, attributes
@@ -231,12 +238,21 @@ failed push of *either* exits **1** (see convention 8).
     install → suite → diagnostics → uninstall → teardown assertion. Read
     [docs/pr-gate.md](docs/pr-gate.md) before touching any of it. The rules that are
     easy to break by "simplifying":
-    - **PR runs push NOTHING** — no OTLP, no MinIO. A `channel=pr` would fork
-      `deployment.environment`, the report-bucket prefix and the trace root-span name,
-      and give every run its own series (exactly what convention 11 forbids). The
-      publish and push steps therefore live in `systemtest.yml`, *outside* the action —
-      which also keeps the action provably secret-free, and it runs fork-authored
-      Dockerfiles.
+    - **PR runs push under `channel="pr"`, and publish NO hosted report.** That is safe
+      only because every release panel and all four alert rules pin `channel="release"`
+      explicitly — `CosySystemtestStale` included, so frequent PR runs cannot mask a
+      dead nightly. **Never add a panel or rule that omits the channel filter.** The
+      push is `continue-on-error` in the gates (telemetry must not decide whether a PR
+      merges) and lives in the *caller* workflows, never in the action: composite
+      actions get no secrets automatically, and the action must stay provably
+      secret-free because it runs fork-authored Dockerfiles. `report-published: false`
+      suppresses the derived report URL — deriving one for a report nobody published
+      puts a permanent 404 on the dashboard.
+    - **The PR dashboard section is a run TABLE, not pass/fail tiles.** Per-feature
+      metrics carry only `feature` + `channel`, so they cannot distinguish one pull
+      request from another; a `last_over_time` tile over `channel="pr"` would blend
+      unrelated PRs and show whichever finished last. Per-feature detail for a single
+      run comes from its trace. `cosy.systemtest.pr_url` rides on `run_info` only.
     - **The gate's authoritative check is the caller's `jq` allowlist** over
       `results/summary.json`, not `--fail-on-failure`. All six `@core` specs skip
       themselves when `INSTALL_LOG` is unset, so a dead install yields six skips, a

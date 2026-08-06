@@ -147,6 +147,12 @@ jobs:
           # The image guards skip any tag that is empty, so this is safe to enable
           # whenever ANY sibling was built and is a no-op when none was.
           expect-image-tags: ${{ steps.backend.outputs.matched == 'true' || steps.frontend.outputs.matched == 'true' }}
+          # `pr` even though this gate usually installs the RELEASED images: what is
+          # under test here is the suite, not the product. A red run means a spec or a
+          # page object is wrong, and that must not surface on a release panel as though
+          # the shipped product had regressed.
+          channel: pr
+          report-published: "false"
 
       # The authoritative gate — see the identical step in the product repos for why it
       # lives in the workflow and not in the action. Here it matters even more: a PR to
@@ -187,6 +193,32 @@ jobs:
           every other feature is covered by the runner's --fail-on-failure."
           fi
           exit "$rc"
+
+      # Publish this run to SigNoz so the gate's own history — flakiness, wall clock,
+      # which features go red on PRs — is visible next to the nightly. It lands under
+      # channel="pr", which every release panel and alert excludes by pinning
+      # channel="release", so it cannot contaminate the released-product view.
+      #
+      # `continue-on-error` is deliberate and is the opposite of the nightly. There the
+      # push IS the signal, so a failed push exits 1 and reds the job (convention 8).
+      # Here the gate's verdict is the assertion step above; telemetry must never be
+      # what decides whether a pull request can merge.
+      #
+      # Skips itself with one INFO line when the OTEL_INGEST_* secrets are absent —
+      # which is always the case on a fork PR, and on any repo where they have not been
+      # provisioned. Nothing breaks; the run simply does not appear on the dashboard.
+      - name: Push results to SigNoz
+        if: always() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure')
+        continue-on-error: true
+        working-directory: .
+        env:
+          OTEL_INGEST_URL: ${{ vars.OTEL_INGEST_URL || 'https://otel-ingest.jannekeipert.de' }}
+          OTEL_INGEST_USER: ${{ secrets.OTEL_INGEST_USER }}
+          OTEL_INGEST_PASSWORD: ${{ secrets.OTEL_INGEST_PASSWORD }}
+          # Run-level, so it rides on run_info only (convention 11). Without it a row in
+          # the PR table is a bare GitHub run id nobody can place.
+          COSY_PR_URL: ${{ github.event.pull_request.html_url }}
+        run: npx tsx scripts/run-systemtest.ts --push-only
 
       - name: Upload systemtest report
         if: always() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure')

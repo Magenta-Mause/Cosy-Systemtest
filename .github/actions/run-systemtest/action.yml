@@ -79,6 +79,22 @@ inputs:
       can switch off. See docs/pr-gate.md.
     required: false
     default: "false"
+  channel:
+    description: >-
+      Overrides the channel label written to results/summary.json. Empty keeps the
+      derived value (`release`, or `staging` when a tag/ref was pinned). PR gates pass
+      `pr`, which keeps their runs out of every release panel and alert — all of those
+      pin `channel="release"` explicitly — while still letting them be charted
+      separately. Never point a PR run at `release`.
+    required: false
+    default: ""
+  report-published:
+    description: >-
+      Whether this run's Playwright report is published to the public bucket. PR gates
+      pass `false`: they keep the report as a GitHub artifact, so deriving a hosted URL
+      would put a permanent 404 on the dashboard.
+    required: false
+    default: "true"
   expect-image-tags:
     description: >-
       When `true`, assert that the images actually under test are the ones the caller
@@ -272,6 +288,7 @@ runs:
         INPUT_BACKEND_TAG: ${{ inputs.backend-tag }}
         INPUT_FRONTEND_TAG: ${{ inputs.frontend-tag }}
         INPUT_CONFIG_REF: ${{ inputs.config-ref }}
+        INPUT_CHANNEL: ${{ inputs.channel }}
       run: |
         args=(docker --default --port 8080 --domain localhost)
         channel="release"
@@ -287,6 +304,13 @@ runs:
         if [ -n "$INPUT_CONFIG_REF" ]; then
           args+=(--config-ref "$INPUT_CONFIG_REF")
           channel="staging"
+        fi
+
+        # An explicit channel wins over the derived one. A PR gate pins images, which
+        # would otherwise derive `staging` and put gate runs on the staging panels.
+        if [ -n "$INPUT_CHANNEL" ]; then
+          echo "Channel overridden by the caller: ${INPUT_CHANNEL} (derived was ${channel})."
+          channel="$INPUT_CHANNEL"
         fi
 
         echo "Channel: ${channel}"
@@ -492,6 +516,7 @@ runs:
         COSY_BASE_URL: ${{ inputs.base-url }}
         INSTALL_DIR: ${{ inputs.install-dir }}
         SYSTEMTEST_RETRIES: ${{ inputs.retries }}
+        SYSTEMTEST_REPORT_PUBLISHED: ${{ inputs.report-published }}
         INPUT_GREP: ${{ inputs.grep }}
         INPUT_FAIL_ON_FAILURE: ${{ inputs.fail-on-failure }}
       run: |

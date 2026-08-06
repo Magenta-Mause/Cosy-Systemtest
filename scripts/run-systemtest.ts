@@ -637,6 +637,13 @@ export function buildMetricsPayload(summary: Summary, traceId: string): OtlpPayl
   if (summary.reportUrl) {
     runAttributes.push(attribute('cosy.systemtest.report_url', summary.reportUrl));
   }
+  // The pull request a `channel=pr` run gated. A run-level dimension, so it belongs
+  // here and nowhere else (convention 11) — and without it a row in the PR table is
+  // just a GitHub run id nobody can place. Absent for the nightly, which has no PR.
+  const prUrl = optionalEnv('COSY_PR_URL');
+  if (prUrl) {
+    runAttributes.push(attribute('cosy.systemtest.pr_url', prUrl));
+  }
 
   const executed = summary.features.filter((f) => f.status !== 'skipped');
   const anyFailed = summary.features.some((f) => f.status === 'failed');
@@ -1337,6 +1344,11 @@ function buildRunUrl(): string | null {
 function buildReportUrl(channel: string): string | null {
   const runId = optionalEnv('GITHUB_RUN_ID');
   if (!runId) return null; // Not on GitHub Actions — nothing is uploaded either.
+  // Deriving a URL for a run that publishes no report would put a permanent 404 on
+  // the dashboard, which is worse than no link: it looks like a broken upload rather
+  // than a deliberate choice. PR gate runs set this to `false` — they keep their
+  // report as a GitHub artifact and never touch the public bucket (docs/pr-gate.md).
+  if (optionalEnv('SYSTEMTEST_REPORT_PUBLISHED') === 'false') return null;
   const base = (optionalEnv('REPORTS_BASE_URL') ?? DEFAULT_REPORTS_BASE_URL).replace(/\/+$/, '');
   return `${base}/${channel}/${runId}/index.html`;
 }

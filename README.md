@@ -142,8 +142,13 @@ shared action.
 
 The PR gate is documented separately in **[docs/pr-gate.md](docs/pr-gate.md)**: it builds
 images from the pull request, installs those, runs `@core`, and **fails** on a red
-feature (the deliberate opposite of "metrics are truth" below). It pushes nothing to
-SigNoz and publishes no hosted report.
+feature (the deliberate opposite of "metrics are truth" below).
+
+Its runs report under `channel="pr"` and appear in the dashboard's own "PR gate" section.
+They cannot affect the release view: every release panel and all four alert rules pin
+`channel="release"` explicitly. A PR run publishes no hosted report — it keeps the
+Playwright report as a GitHub artifact — and its push is `continue-on-error`, because
+telemetry must never decide whether a pull request can merge.
 
 ### The nightly release run
 
