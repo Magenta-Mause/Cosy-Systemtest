@@ -381,6 +381,13 @@ jobs:
           # Pinned to the mc release the cluster's MinIO chart uses. The published
           # .sha256sum is verified — an unpinned installer script fetching an
           # unverified binary is not something a credential should be handed to.
+          #
+          # Fetched from the GitHub release, NOT dl.min.io: MinIO archived the
+          # open-source mc project and dl.min.io now answers 410 Gone on every
+          # path. That broke this step silently from 2026-09-12 (it warns and
+          # exits 0 by design), so five runs published a report_url pointing at
+          # an object that was never written. The minio/mc repo is archived too,
+          # but its release assets still download.
           MC_VERSION: RELEASE.2024-11-21T17-21-54Z
         run: |
           set -uo pipefail
@@ -408,7 +415,9 @@ jobs:
             exit 0
           }
 
-          base="https://dl.min.io/client/mc/release/linux-amd64/archive/mc.${MC_VERSION}"
+          # The .sha256sum names the binary "mc.${MC_VERSION}", which is exactly what
+          # the -o below writes, so `sha256sum -c` needs no rewriting.
+          base="https://github.com/minio/mc/releases/download/${MC_VERSION}/mc.linux-amd64.${MC_VERSION}"
           curl -fsSL --retry 3 --retry-delay 5 -o "mc.${MC_VERSION}" "${base}" || fail "mc download failed"
           curl -fsSL --retry 3 --retry-delay 5 -o "mc.${MC_VERSION}.sha256sum" "${base}.sha256sum" \
             || fail "mc checksum download failed"
