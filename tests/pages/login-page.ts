@@ -1,5 +1,5 @@
-import type { Locator, Page } from '@playwright/test';
-import { expect } from '@playwright/test';
+import type { Locator, Page, Request } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { LOGIN_TIMEOUT_MS, UI_ACTION_TIMEOUT_MS } from '@helpers/constants';
 
 /**
@@ -36,8 +36,43 @@ export class LoginPage {
     return this.page.getByTestId('login-open-btn');
   }
 
+  /**
+   * Open the home page and wait until the app has rendered its login banner.
+   *
+   * Recovers ONCE from `net::ERR_NETWORK_CHANGED`. Chrome aborts every in-flight request
+   * when the host's network interfaces change, and on a CI runner a game-server container
+   * starting or stopping in the same second is exactly that. The HTML and entry chunks
+   * load, the lazy route chunks are aborted, and the SPA stays a blank page, so the login
+   * banner never appears. Specs with retries shrug this off silently; specs pinned to
+   * `retries: 0` (event-stream-resilience) turned it into a false "broken in the released
+   * product" alert on 2026-09-25/26/28. The reload is taken only when that exact abort was
+   * seen, and it is annotated on the test, so a genuinely broken UI still fails here.
+   */
   async navigate(): Promise<void> {
-    await this.page.goto('/');
+    const abortedByNetworkChange: string[] = [];
+    const onRequestFailed = (request: Request): void => {
+      if (request.failure()?.errorText === 'net::ERR_NETWORK_CHANGED') {
+        abortedByNetworkChange.push(request.url());
+      }
+    };
+    this.page.on('requestfailed', onRequestFailed);
+    try {
+      await this.page.goto('/');
+      try {
+        await expect(this.openLoginButton).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+        return;
+      } catch (error) {
+        if (abortedByNetworkChange.length === 0) throw error;
+      }
+      test.info().annotations.push({
+        type: 'network-changed-reload',
+        description: `Reloaded once: ${abortedByNetworkChange.length} request(s) aborted with net::ERR_NETWORK_CHANGED, first ${abortedByNetworkChange[0]}`,
+      });
+      await this.page.reload();
+      await expect(this.openLoginButton).toBeVisible({ timeout: UI_ACTION_TIMEOUT_MS });
+    } finally {
+      this.page.off('requestfailed', onRequestFailed);
+    }
   }
 
   async openDialog(): Promise<void> {

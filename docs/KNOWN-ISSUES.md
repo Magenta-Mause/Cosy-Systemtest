@@ -298,6 +298,30 @@ DISJOINT from the template catalog, so a template whose game has no games-API pr
 is still unreachable through the wizard. See "Wizard catalog templates are gated by the
 SteamGridDB games API" above.
 
+## Blank page from `net::ERR_NETWORK_CHANGED` right after a container starts (CI only)
+
+**Symptom.** A spec fails in the `loggedInPage` fixture with
+`locator.click: Timeout 15000ms exceeded … waiting for getByTestId('login-open-btn')`.
+The screenshot is the bare background colour, and the trace shows `index.html` and the
+entry chunks at 200 but every lazy route chunk (`_serverId-*.js`, `console-*.js`, …)
+failing with **`net::ERR_NETWORK_CHANGED`**. The spec body never ran.
+
+**Cause.** Chrome aborts every in-flight request when the host's network interfaces
+change, and a game-server container starting or stopping adds or removes a veth on the
+runner. The run is serial, so the culprit is the previous spec's container activity
+(`console.spec.ts` in every observed case) landing in the same second as the next page
+load. It is timing luck: the same order passed on other nights.
+
+**Why it surfaced as an alert.** Every other spec has `retries: 2` on CI and absorbs this
+silently. `event-stream-resilience` pins `retries: 0`, so it failed on 2026-09-25, -26 and
+-28, and two consecutive reds fired `CosySystemtestFeatureFailing` ("broken in the
+RELEASED product") with no product defect behind it.
+
+**Guard.** `LoginPage.navigate()` now waits for the login banner and, only if a request
+was aborted with `net::ERR_NETWORK_CHANGED`, reloads once. The reload is recorded as a
+`network-changed-reload` annotation on the test, so the report shows when it happened.
+Any other blank page still fails.
+
 ## rcon is QUARANTINED on CI (Minecraft never boots on a GitHub-hosted runner)
 
 `rcon` is gated behind **`SYSTEMTEST_HEAVY`** (`runsOnlyWithHeavyEnabled()`), so the
