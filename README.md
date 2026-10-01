@@ -133,11 +133,31 @@ the two secrets the step logs one INFO line and skips — forks are unaffected.
 
 ## How it runs in CI
 
-`.github/workflows/systemtest.yml` (nightly `30 2 * * *` + `workflow_dispatch`):
-checkout → Node 22 → `npm ci` → `playwright install --with-deps chromium` → install
+There are two shapes: the **nightly release run** in this repo, and the **PR gate** that
+three repositories run before a merge. Both call the same composite action,
+`.github/actions/run-systemtest`, which owns everything from install to the teardown
+assertion. Only the reporting differs — and the reporting steps are the ones that need
+secrets, which is why they stay in the nightly workflow rather than moving into the
+shared action.
+
+The PR gate is documented separately in **[docs/pr-gate.md](docs/pr-gate.md)**: it builds
+images from the pull request, installs those, runs `@core`, and **fails** on a red
+feature (the deliberate opposite of "metrics are truth" below).
+
+Its runs report under `channel="pr"` and appear in the dashboard's own "PR gate" section.
+They cannot affect the release view: every release panel and all four alert rules pin
+`channel="release"` explicitly. A PR run publishes no hosted report — it keeps the
+Playwright report as a GitHub artifact — and its push is `continue-on-error`, because
+telemetry must never decide whether a pull request can merge.
+
+### The nightly release run
+
+`.github/workflows/systemtest.yml` (nightly `30 2 * * *` + `repository_dispatch` +
+`workflow_dispatch`): checkout → [`run-systemtest` action: Node 22 → `npm ci` →
+`playwright install --with-deps chromium` → pre-pull the compose base images → install
 Cosy → poll health (≤10 min) → run the suite (`--no-push`, writes
 `results/summary.json`) → capture diagnostics → uninstall + assert clean teardown
-(appends the `uninstall` row) → **publish the HTML report**
+(appends the `uninstall` row)] → **publish the HTML report**
 ([below](#hosted-html-reports)) → **push metrics + the run's trace to SigNoz**
 (`--push-only`) → upload the report and results. The runner exits 0 even when features
 fail (metrics are truth); the job only goes red on infrastructure errors — including a

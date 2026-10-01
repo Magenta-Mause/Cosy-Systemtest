@@ -4,6 +4,33 @@ import { resolveBaseURL, UI_ACTION_TIMEOUT_MS } from './tests/helpers/constants'
 const isCI = !!process.env.CI;
 
 /**
+ * Retries, overridable via `SYSTEMTEST_RETRIES`.
+ *
+ * The nightly wants 2: it is a monitoring suite, and a transient blip against a
+ * freshly installed stack should not be reported as a product regression. The PR
+ * gates want 1 (docs/pr-gate.md) for two reasons — a genuinely broken spec otherwise
+ * burns three times a 360-480 s describe budget before the author sees red, and every
+ * retry widens the window in which a failing test can pass and be recorded as `flaky`,
+ * which `parseReport` counts as PASSED. Zero would close that hole entirely but makes
+ * a 30-minute blocking gate fail on any single transient blip, which is how required
+ * checks get switched off.
+ *
+ * An unparseable or negative value is a hard error rather than a silent fallback: a
+ * typo here would quietly change how much evidence the gate demands.
+ */
+function resolveRetries(): number {
+  const raw = process.env.SYSTEMTEST_RETRIES;
+  if (raw === undefined || raw === '') return isCI ? 2 : 0;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(
+      `SYSTEMTEST_RETRIES must be a non-negative integer, got ${JSON.stringify(raw)}.`,
+    );
+  }
+  return parsed;
+}
+
+/**
  * Chromium-only for now (add Firefox/WebKit once the suite is stable). Retries on
  * CI absorb transient blips against a freshly installed stack; locally we want
  * failures to surface immediately.
@@ -30,7 +57,7 @@ export default defineConfig({
   testDir: './tests/specs',
   fullyParallel: true,
   forbidOnly: isCI,
-  retries: isCI ? 2 : 0,
+  retries: resolveRetries(),
   timeout: 600_000,
   ...(isCI ? { workers: 1 } : {}),
   reporter: isCI

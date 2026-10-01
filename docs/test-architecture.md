@@ -47,6 +47,15 @@ The release channel installs the frontend *image pinned by the installer*, not
 released revision**, e.g. `git show 2659b07:<path>` /
 `git ls-tree -r 2659b07 --name-only` in `Cosy-frontend` — not from `HEAD`.
 
+**The PR gates are the deliberate exception** ([pr-gate.md](pr-gate.md)): a frontend PR
+installs an image built from that pull request, so its page objects are exercised
+against unreleased UI. That is the point — it is how a selector break is caught before
+it merges rather than at 02:30 the next morning. It does not change the rule here: this
+repo's `main` must keep matching the RELEASED frontend, because that is what the nightly
+installs. A page object may only move to a new selector once the frontend change
+carrying it has shipped; until then the frontend PR carries the systemtest change on a
+matching branch, which the gate resolves and runs together.
+
 **When a new Cosy release ships, re-derive the affected page objects against the new
 pinned revision.** The v1.0.3 → v1.1.0 bump is the worked example of why this is not
 busywork: the create-server wizard's steps were reshuffled (game *and* template moved
@@ -125,5 +134,11 @@ fails with a message quoting nearby lines if the installer's summary format chan
 ## Suite selection
 
 By **Playwright tags**, not npm-script file lists (the sibling repo's silent-skip
-trap). Every spec is tagged `@core`; `npm run test:core` runs `--grep @core`. New
-specs get a tag rather than an entry in a hand-maintained file list.
+trap). Every spec is tagged either `@core` or `@extended`; `npm run test:core` runs
+`--grep @core`. New specs get a tag rather than an entry in a hand-maintained file list.
+
+`@core` is the install → lifecycle → uninstall path: `install`, `auth`, `console`,
+`files`, `server-create`, `server-lifecycle` (6 spec files). `@extended` is the other 13.
+The distinction is load-bearing beyond the npm scripts — the **PR gates run `@core`
+only** ([pr-gate.md](pr-gate.md)), so moving a spec between tags changes what blocks a
+merge. The nightly runs everything regardless of tag.

@@ -1,0 +1,652 @@
+name: Run Cosy systemtest
+description: >-
+  Install Cosy from scratch with install_cosy.sh, run the Playwright suite against the
+  installed stack, capture diagnostics, uninstall, and assert a clean teardown.
+
+# WHY THIS IS AN ACTION AND NOT JUST STEPS IN systemtest.yml
+#
+# Three workflows need this exact sequence, in three different repositories: the nightly
+# release run here, and the PR gates in Cosy-Frontend and cosy-backend (which build their
+# PR's image locally and install THAT instead of the published tag). Every step below is
+# load-bearing in a way that is not obvious from reading it — the health poll exists
+# because the installer's own 180 s cap is flaky, the `.env` copy exists because the
+# installed file is root-owned chmod 600, the pre-pull exists because a Docker Hub 429
+# otherwise surfaces as four mystery-red features. Copying that into three repos means
+# three places to fix the next incident in, and two of them will be missed.
+#
+# WHAT DELIBERATELY STAYS IN THE CALLING WORKFLOW: the MinIO report publish, the SigNoz
+# OTLP push, and the artifact uploads. Composite actions do not receive secrets
+# automatically, so those would have to be piped through inputs — added credential
+# surface for zero reuse, since the PR gates use none of them. Keeping them out also
+# means this action is provably secret-free, which matters because the PR gates run it
+# on fork-authored code.
+#
+# NOTE ON `shell: bash`: composite actions require an explicit shell, and `shell: bash`
+# runs `bash --noprofile --norc -eo pipefail`, whereas a workflow `run:` with no shell
+# key gets `bash -e` — i.e. WITHOUT pipefail. So this action really does enable pipefail
+# where the workflow did not. That is safe (and was already the author's intent: see the
+# comments that say "pipefail is on by default here"): every pipeline whose failure is
+# expected is guarded with `|| true`, `set +e`, or read through `PIPESTATUS`.
+
+inputs:
+  backend-tag:
+    description: >-
+      Backend image tag passed to install_cosy.sh as --backend-tag. Empty installs the
+      version pinned by the installer. A locally built image with this tag is used
+      as-is: the compose file sets no pull_policy, so Docker never contacts a registry
+      for a tag that already exists in the local image store.
+    required: false
+    default: ""
+  frontend-tag:
+    description: "Frontend image tag passed as --frontend-tag; empty uses the pinned version."
+    required: false
+    default: ""
+  config-ref:
+    description: >-
+      Git ref of Magenta-Mause/Cosy the compose/config files are fetched from
+      (--config-ref). Empty uses the installer's default, which is the pinned release
+      tag (COSY_TAG) and NOT main.
+    required: false
+    default: ""
+  install-dir:
+    description: "Where install_cosy.sh puts everything. Only change this with the installer."
+    required: false
+    default: "/opt/cosy"
+  base-url:
+    description: "URL the installed stack is served at; the suite's baseURL."
+    required: false
+    default: "http://localhost:8080"
+  grep:
+    description: >-
+      Playwright `--grep` tag expression. The PR gates pass `@core` (6 spec files);
+      empty runs the whole suite, which is what the nightly wants.
+    required: false
+    default: ""
+  retries:
+    description: >-
+      `SYSTEMTEST_RETRIES`. Empty keeps the config default (2 on CI). PR gates pass 1:
+      a broken spec otherwise burns three times a 360-480 s describe budget, and every
+      extra retry widens the window where a failure is recorded as `flaky` = passed.
+    required: false
+    default: ""
+  fail-on-failure:
+    description: >-
+      When `true`, the runner exits non-zero if any feature failed — the deliberate
+      opposite of convention 8 ("metrics are truth"), which the nightly depends on.
+      Defaults to `false` so that a caller which forgets it cannot accidentally break
+      the nightly; the PR gates set it explicitly AND additionally assert the result
+      themselves, because a gate must not have a single point of failure that a typo
+      can switch off. See docs/pr-gate.md.
+    required: false
+    default: "false"
+  channel:
+    description: >-
+      Overrides the channel label written to results/summary.json. Empty keeps the
+      derived value (`release`, or `staging` when a tag/ref was pinned). PR gates pass
+      `pr`, which keeps their runs out of every release panel and alert — all of those
+      pin `channel="release"` explicitly — while still letting them be charted
+      separately. Never point a PR run at `release`.
+    required: false
+    default: ""
+  report-published:
+    description: >-
+      Whether this run's Playwright report is published to the public bucket. PR gates
+      pass `false`: they keep the report as a GitHub artifact, so deriving a hosted URL
+      would put a permanent 404 on the dashboard.
+    required: false
+    default: "true"
+  expect-image-tags:
+    description: >-
+      When `true`, assert that the images actually under test are the ones the caller
+      built. Only meaningful when backend-tag/frontend-tag name locally built images.
+      See the "Assert the images under test" step for what exactly is checked and why
+      three separate checks are needed.
+    required: false
+    default: "false"
+
+outputs:
+  channel:
+    description: "`release` when nothing was pinned, `staging` when any tag/ref override was given."
+    value: ${{ steps.install.outputs.channel }}
+  backend-tag:
+    description: "Effective backend tag, read back out of the installed .env (not echoed from the input)."
+    value: ${{ steps.versions.outputs.backend }}
+  frontend-tag:
+    description: "Effective frontend tag, read back out of the installed .env."
+    value: ${{ steps.versions.outputs.frontend }}
+  systemtest-dir:
+    description: >-
+      Absolute path of the cosy-systemtest checkout this action lives in. Callers need it
+      to locate results/ and playwright-report/ for artifact upload, because a PR gate
+      checks this repo out into a subdirectory rather than at the workspace root.
+    value: ${{ steps.locate.outputs.root }}
+
+runs:
+  using: composite
+  steps:
+    # This action is invoked as `./<path>/.github/actions/run-systemtest`, so its own
+    # location tells us where the repo was checked out — at the workspace root for the
+    # nightly, under ./systemtest for a PR gate. Deriving it beats an input the caller
+    # can get wrong, and beats assuming $GITHUB_WORKSPACE (true only for the nightly).
+    - name: Locate the systemtest checkout
+      id: locate
+      shell: bash
+      run: |
+        root="$(cd "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        if [ ! -f "${root}/playwright.config.ts" ]; then
+          echo "::error::Expected the cosy-systemtest checkout at ${root} but found no \
+        playwright.config.ts there. This action derives the repo root from its own path \
+        (\$GITHUB_ACTION_PATH/../../..); moving the action deeper or shallower in the tree \
+        breaks that derivation and this check exists to say so instead of failing later \
+        with a confusing 'no tests found'."
+          exit 1
+        fi
+        echo "Systemtest checkout: ${root}"
+        echo "root=${root}" >> "$GITHUB_OUTPUT"
+
+        # Workspace-relative form too: setup-node's `cache-dependency-path` is
+        # documented as relative to the workspace, and an unmatched pattern there is a
+        # hard error rather than a silent cache miss. `.` when we are at the root.
+        # An `if`, not `[ ... ] && rel="."`: under `set -e` a false AND-list is itself a
+        # failing statement and would abort the step.
+        rel="${root#"${GITHUB_WORKSPACE}/"}"
+        if [ "$rel" = "$root" ]; then
+          rel="."
+        fi
+        echo "Workspace-relative: ${rel}"
+        echo "rel=${rel}" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: ${{ steps.locate.outputs.rel }}/package-lock.json
+
+    - name: Install test dependencies
+      shell: bash
+      working-directory: ${{ steps.locate.outputs.root }}
+      run: npm ci
+
+    # No pre-built runner image on purpose: `playwright install` keeps the browser
+    # in lockstep with the pinned @playwright/test version (image-tag drift was a
+    # known 100%-red failure mode in the sibling repo).
+    - name: Install Playwright chromium
+      shell: bash
+      working-directory: ${{ steps.locate.outputs.root }}
+      run: npx playwright install --with-deps chromium
+
+    # GUARD 1 of 3 — see the "Assert the images under test" step for the full argument.
+    #
+    # Runs BEFORE the ~6-minute install so a missing image is a 5-second failure, and
+    # catches the single nastiest way this gate can lie: `docker/setup-buildx-action`
+    # defaults to the `docker-container` driver, where a build's output goes to the
+    # build cache and NOT into the local image store unless `load: true` is set. With
+    # no local image, compose's default `missing` pull policy falls back to the
+    # REGISTRY — so the gate would install the last published image and report a
+    # confident green about code that was never run.
+    - name: Assert the images under test are present locally
+      id: images
+      if: inputs.expect-image-tags == 'true'
+      shell: bash
+      env:
+        BACKEND_TAG: ${{ inputs.backend-tag }}
+        FRONTEND_TAG: ${{ inputs.frontend-tag }}
+      run: |
+        # Hardcoded to match config/docker/docker-compose.yml in Magenta-Mause/Cosy
+        # (lines 38 and 90). If the compose file ever renames an image, this assertion
+        # fails loudly rather than the gate quietly testing the wrong thing.
+        check() {
+          local name="$1" tag="$2" out="$3"
+          if [ -z "$tag" ]; then
+            echo "No ${name} tag pinned — the released image will be installed."
+            return 0
+          fi
+          local ref="ghcr.io/magenta-mause/${name}:${tag}"
+          local id
+          if ! id="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null)"; then
+            echo "::error::${ref} is not in the local image store, so installing it would \
+        pull from ghcr.io and test PUBLISHED code instead of this pull request. The usual \
+        cause is a docker/build-push-action step without \`load: true\` — under the \
+        default \`docker-container\` buildx driver the image never reaches the daemon."
+            exit 1
+          fi
+          echo "${name}: ${ref} -> ${id}"
+          echo "${out}=${id}" >> "$GITHUB_OUTPUT"
+        }
+        check cosy-backend  "$BACKEND_TAG"  backend-id
+        check cosy-frontend "$FRONTEND_TAG" frontend-id
+
+    # Warm every Docker Hub base image the compose stack uses, BEFORE the install that
+    # pulls them. (The game-server image is pulled later, by the backend, and has its
+    # own step further down.)
+    #
+    # Docker Hub rate-limits anonymously by IP and GitHub runners share egress IPs. The
+    # nightly did one run a day; PR gates do ~10, several concurrent, so the exposure is
+    # a step change. When the limit is hit mid-install the `toomanyrequests` reply lands
+    # inside `docker compose up` and surfaces as a stack that never becomes healthy —
+    # i.e. every feature red for no visible reason. Pulling here turns that into one
+    # labelled infrastructure error, and compose then finds the images already present.
+    - name: Pre-pull compose base images
+      shell: bash
+      run: |
+        # Mirrors config/docker/docker-compose.yml in Magenta-Mause/Cosy. A drifted list
+        # only costs a pull during install; it cannot make the run wrong.
+        images=(
+          alpine:latest
+          nginx:1.25
+          postgres:16
+          grafana/loki:2.9.4
+          influxdb:2.7-alpine
+          caddy:2
+        )
+        failed=()
+        for image in "${images[@]}"; do
+          pulled=""
+          for attempt in 1 2 3; do
+            if docker pull --quiet "$image" >/dev/null 2>&1; then
+              pulled="yes"; break
+            fi
+            sleep $(( attempt * 5 ))
+          done
+          if [ -n "$pulled" ]; then
+            echo "  ok   ${image}"
+          else
+            echo "  FAIL ${image}"
+            failed+=("$image")
+          fi
+        done
+        if [ "${#failed[@]}" -gt 0 ]; then
+          echo "::error::Could not pre-pull ${failed[*]} after 3 attempts each — \
+        INFRASTRUCTURE failure, not a Cosy defect. Docker Hub rate limiting \
+        (toomanyrequests) on a shared runner IP is the usual cause. Failing here rather \
+        than letting the install stall on the same pull and look like a product bug."
+          exit 1
+        fi
+
+    # Fetch the installer exactly as a real user would (release channel = main).
+    - name: Download install_cosy.sh
+      shell: bash
+      run: |
+        curl -fsSL \
+          https://raw.githubusercontent.com/Magenta-Mause/Cosy/main/install_cosy.sh \
+          -o install_cosy.sh
+
+    # Install Cosy from scratch, teeing stdout so the suite can parse the printed
+    # admin credentials. We capture the installer's exit code WITHOUT letting the
+    # pipe (pipefail is on here) abort the job — the health poll below
+    # is our real gate, since the script's own 180s cap is the known flakiness.
+    #
+    # The optional tag overrides are appended as flags ONLY when
+    # non-empty (an empty `--backend-tag ''` would install a nonexistent image), and
+    # they are read from step env rather than interpolated into the script, so an
+    # input can never break out of the argument list. Any override means we are no
+    # longer testing the published product: the channel flips to `staging`.
+    - name: Install Cosy
+      id: install
+      shell: bash
+      env:
+        INPUT_BACKEND_TAG: ${{ inputs.backend-tag }}
+        INPUT_FRONTEND_TAG: ${{ inputs.frontend-tag }}
+        INPUT_CONFIG_REF: ${{ inputs.config-ref }}
+        INPUT_CHANNEL: ${{ inputs.channel }}
+      run: |
+        args=(docker --default --port 8080 --domain localhost)
+        channel="release"
+
+        if [ -n "$INPUT_BACKEND_TAG" ]; then
+          args+=(--backend-tag "$INPUT_BACKEND_TAG")
+          channel="staging"
+        fi
+        if [ -n "$INPUT_FRONTEND_TAG" ]; then
+          args+=(--frontend-tag "$INPUT_FRONTEND_TAG")
+          channel="staging"
+        fi
+        if [ -n "$INPUT_CONFIG_REF" ]; then
+          args+=(--config-ref "$INPUT_CONFIG_REF")
+          channel="staging"
+        fi
+
+        # An explicit channel wins over the derived one. A PR gate pins images, which
+        # would otherwise derive `staging` and put gate runs on the staging panels.
+        if [ -n "$INPUT_CHANNEL" ]; then
+          echo "Channel overridden by the caller: ${INPUT_CHANNEL} (derived was ${channel})."
+          channel="$INPUT_CHANNEL"
+        fi
+
+        echo "Channel: ${channel}"
+        echo "Installer arguments: ${args[*]}"
+        # $GITHUB_ENV so the caller's later steps (the SigNoz push) see it, AND a step
+        # output so a caller can branch on it without depending on env propagation.
+        echo "COSY_CHANNEL=${channel}" >> "$GITHUB_ENV"
+        echo "channel=${channel}" >> "$GITHUB_OUTPUT"
+
+        set +e
+        sudo bash install_cosy.sh "${args[@]}" 2>&1 | tee install.log
+        code=${PIPESTATUS[0]}
+        set -e
+        echo "Installer exited with code ${code}."
+        echo "INSTALL_LOG=${GITHUB_WORKSPACE}/install.log" >> "$GITHUB_ENV"
+
+    # Own health gate: poll for up to 10 minutes rather than trusting the script's
+    # exit alone. Distinguish "degraded" (reachable but not UP) from "ok" per plan
+    # 3.1; either way we proceed so the suite records the precise feature status.
+    - name: Wait for stack health
+      shell: bash
+      env:
+        COSY_BASE_URL: ${{ inputs.base-url }}
+      run: |
+        deadline=$(( $(date +%s) + 600 ))
+        status="unreachable"
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+          body=$(curl -fsS "${COSY_BASE_URL}/api/actuator/health" 2>/dev/null || true)
+          if echo "$body" | grep -q '"status":"UP"'; then
+            status="ok"; break
+          elif [ -n "$body" ]; then
+            status="degraded"
+          fi
+          sleep 10
+        done
+        echo "Health status: ${status}"
+        # Never fail here — install.spec is the source of truth for the install row.
+
+    # The installed .env is root-owned + chmod 600, unreadable by the `runner`
+    # user the suite runs as. Copy it to a runner-readable location instead of
+    # chmod'ing the installed file — we must not mutate the state under test.
+    # install.ts reads INSTALL_ENV_FILE in preference to ${INSTALL_DIR}/config/.env.
+    - name: Expose .env to the test runner
+      shell: bash
+      env:
+        INSTALL_DIR: ${{ inputs.install-dir }}
+      run: |
+        sudo install -m 0644 -o "$(id -un)" "${INSTALL_DIR}/config/.env" "$RUNNER_TEMP/cosy-install.env"
+        echo "INSTALL_ENV_FILE=$RUNNER_TEMP/cosy-install.env" >> "$GITHUB_ENV"
+
+    # A stored result must say WHICH build it tested, otherwise a red row from a
+    # pinned pre-release run is indistinguishable from a red released product. The
+    # installer resolves the effective tags into the generated .env, so read them
+    # back from there instead of echoing what we passed in (defaults included).
+    - name: Record installed versions
+      id: versions
+      shell: bash
+      run: |
+        # `|| true`: a missing key must yield "unknown", not abort the step under
+        # `set -e`/`pipefail` (grep exits 1 when it matches nothing).
+        read_tag() {
+          grep -E "^$1=" "$INSTALL_ENV_FILE" | tail -n 1 | cut -d= -f2- || true
+        }
+        backend="$(read_tag BACKEND_IMAGE_TAG)"
+        frontend="$(read_tag FRONTEND_IMAGE_TAG)"
+        [ -n "$backend" ] || backend="unknown"
+        [ -n "$frontend" ] || frontend="unknown"
+
+        echo "Installed backend image tag:  ${backend}"
+        echo "Installed frontend image tag: ${frontend}"
+        echo "Channel: ${COSY_CHANNEL:-release}"
+
+        # Consumed by scripts/run-systemtest.ts → results/summary.json (versions).
+        echo "COSY_BACKEND_TAG=${backend}" >> "$GITHUB_ENV"
+        echo "COSY_FRONTEND_TAG=${frontend}" >> "$GITHUB_ENV"
+        echo "backend=${backend}" >> "$GITHUB_OUTPUT"
+        echo "frontend=${frontend}" >> "$GITHUB_OUTPUT"
+
+    # GUARDS 2 and 3 of 3 — "is the stack that is about to be tested built from THIS
+    # pull request?"
+    #
+    # Three checks exist because each catches a failure the others cannot, and every
+    # one of them fails GREEN — the run looks completely healthy while testing the
+    # wrong code, which is worse than no gate at all:
+    #
+    #   1 (before install)  the tagged image exists locally at all. Catches a skipped
+    #                       or mis-tagged build, and the buildx `load: true` trap.
+    #   2 (here)            the installer actually RECEIVED the tag. Guard 1 cannot see
+    #                       this: if `--backend-tag` never made it onto the argument
+    #                       list, the installer silently installs its pinned default,
+    #                       and that image is legitimately present locally too (we just
+    #                       pulled it), so guard 1 still passes.
+    #   3 (here)            the RUNNING container is that exact image id. Catches a
+    #                       future `pull_policy: always` in the compose file, which
+    #                       would re-pull over the local tag — the one thing this whole
+    #                       design rests on and the one thing we do not control, since
+    #                       the compose file is fetched from another repository at
+    #                       install time.
+    - name: Assert the images under test are the ones we built
+      if: inputs.expect-image-tags == 'true'
+      shell: bash
+      env:
+        BACKEND_TAG: ${{ inputs.backend-tag }}
+        FRONTEND_TAG: ${{ inputs.frontend-tag }}
+        BACKEND_ID: ${{ steps.images.outputs.backend-id }}
+        FRONTEND_ID: ${{ steps.images.outputs.frontend-id }}
+        INSTALLED_BACKEND: ${{ steps.versions.outputs.backend }}
+        INSTALLED_FRONTEND: ${{ steps.versions.outputs.frontend }}
+      run: |
+        rc=0
+
+        assert_tag() {
+          local what="$1" want="$2" got="$3"
+          if [ -z "$want" ]; then return 0; fi
+          if [ "$want" != "$got" ]; then
+            echo "::error::${what}: asked the installer for tag '${want}' but the \
+        generated .env says '${got}'. The stack under test is NOT this pull request's \
+        build — check that the --${what}-tag flag reached install_cosy.sh."
+            rc=1
+          else
+            echo "  ok  ${what} tag in .env: ${got}"
+          fi
+        }
+        assert_tag backend  "$BACKEND_TAG"  "$INSTALLED_BACKEND"
+        assert_tag frontend "$FRONTEND_TAG" "$INSTALLED_FRONTEND"
+
+        assert_running() {
+          local container="$1" want_id="$2"
+          if [ -z "$want_id" ]; then return 0; fi
+          local got_id
+          if ! got_id="$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null)"; then
+            echo "::error::container ${container} is not running, so its image cannot be \
+        verified. Every feature would be red anyway; failing here names the reason."
+            rc=1
+            return 0
+          fi
+          if [ "$got_id" != "$want_id" ]; then
+            echo "::error::${container} is running image ${got_id} but this pull \
+        request built ${want_id}. Docker replaced the local image — the usual cause \
+        would be a \`pull_policy: always\` appearing in Cosy's docker-compose.yml, \
+        which silently converts this gate into a test of the PUBLISHED image."
+            rc=1
+          else
+            echo "  ok  ${container} runs ${got_id}"
+          fi
+        }
+        assert_running cosy-backend  "$BACKEND_ID"
+        assert_running cosy-frontend "$FRONTEND_ID"
+
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::Refusing to report a result for a stack that is not this pull \
+        request's build."
+        fi
+        exit "$rc"
+
+    # Warm the game-server image BEFORE the suite. Two reasons:
+    #  1. No spec then pays for a cold pull, so the server-start budgets measure the
+    #     product rather than Docker Hub's throughput.
+    #  2. Docker Hub anonymously rate-limits by IP and GitHub runners share egress
+    #     IPs. Without this step a `toomanyrequests` reply lands INSIDE the backend,
+    #     where it surfaces as several servers stuck in a start state — i.e. four
+    #     mystery-red features. Here it is an unmissable infrastructure failure with
+    #     the registry's own message, which is what a rate-limit actually is.
+    # Retried, because a single transient registry blip must not red the nightly.
+    - name: Pre-pull game-server image
+      shell: bash
+      run: |
+        image="halftheopposite/tosios:latest"
+        for attempt in 1 2 3; do
+          if docker pull "$image"; then
+            echo "Pulled ${image} on attempt ${attempt}."
+            exit 0
+          fi
+          echo "Pull attempt ${attempt} for ${image} failed; retrying in 15s."
+          sleep 15
+        done
+        echo "::error::Could not pull ${image} after 3 attempts — INFRASTRUCTURE failure, \
+        not a Cosy defect. Docker Hub rate limiting (toomanyrequests) on a shared runner IP \
+        is the usual cause; check the pull output above. Every server spec would be red."
+        exit 1
+
+    # Metrics-are-truth: this step exits 0 even when features fail. It fails only
+    # on an infrastructure error — Playwright produced no parseable report.
+    #
+    # `--no-push`: this step only WRITES results/summary.json (including the real
+    # per-feature start/end timestamps the trace is laid out on). The push happens
+    # in the caller's "Push results to SigNoz" step, after the teardown assertion
+    # appended the `uninstall` row — otherwise the dashboard and the trace would see
+    # 19 of 20 features. The summary is written whether features pass or fail, so
+    # that later step always has something to push. No ingest credentials here.
+    #
+    # `--fail-on-failure` is added only for a PR gate. It is NOT the gate's only
+    # safeguard: the calling workflow independently asserts over results/summary.json
+    # that every expected feature is present and passed. Two checks, because this one
+    # cannot see the difference between "no feature failed" and "no feature ran" — six
+    # specs skipped by `runsOnlyWithInstall()` because the install died is a green
+    # Playwright, a green runner, and a green job. (Verified: that combination really
+    # does exit 0.) The caller's allowlist is what turns that into a red.
+    - name: Run systemtest suite
+      shell: bash
+      working-directory: ${{ steps.locate.outputs.root }}
+      env:
+        COSY_BASE_URL: ${{ inputs.base-url }}
+        INSTALL_DIR: ${{ inputs.install-dir }}
+        SYSTEMTEST_RETRIES: ${{ inputs.retries }}
+        SYSTEMTEST_REPORT_PUBLISHED: ${{ inputs.report-published }}
+        INPUT_GREP: ${{ inputs.grep }}
+        INPUT_FAIL_ON_FAILURE: ${{ inputs.fail-on-failure }}
+      run: |
+        args=(--no-push)
+        if [ -n "$INPUT_GREP" ]; then
+          args+=(--grep "$INPUT_GREP")
+        fi
+        if [ "$INPUT_FAIL_ON_FAILURE" = "true" ]; then
+          args+=(--fail-on-failure)
+        fi
+        echo "Runner arguments: ${args[*]}"
+        npx tsx scripts/run-systemtest.ts "${args[@]}"
+
+    # Stack diagnostics BEFORE uninstall (which destroys the evidence). Several
+    # specs have failed in ways that point at the STACK degrading mid-run rather
+    # than at product bugs — webhooks died with a bare `TypeError: fetch failed`
+    # (backend unreachable at that moment) and server-lifecycle found a server
+    # wedged in STOPPING for 300s. We cannot tell resource exhaustion (disk full,
+    # RAM pressure, OOM-killer reaping a container) from a real product bug without
+    # the host + container state at the end of the run, so capture it every time.
+    - name: Capture stack diagnostics
+      if: always()
+      shell: bash
+      working-directory: ${{ steps.locate.outputs.root }}
+      run: |
+        set +e
+        mkdir -p results/diagnostics
+        d=results/diagnostics
+
+        docker ps -a                     > "$d/docker-ps.txt" 2>&1
+        docker stats --no-stream         > "$d/docker-stats.txt" 2>&1
+        df -h                            > "$d/df.txt" 2>&1
+        free -m                          > "$d/free.txt" 2>&1
+        # FULL backend log, not a tail. Run 18's `--tail 400` captured 0.34 SECONDS
+        # of wall time (a single template-refresh stack trace burns ~260 lines), so
+        # the decisive "Error in Docker event listener" line — logged once, near the
+        # moment the backend went blind — fell outside the window and the root cause
+        # had to be inferred. The whole log of a ~1 h run is a few MB; that is cheap
+        # next to the traces/videos we already upload.
+        docker logs cosy-backend              > "$d/cosy-backend.log" 2>&1
+        docker logs cosy-database --tail 500  > "$d/cosy-database.log" 2>&1
+        journalctl -u docker --no-pager 2>/dev/null | tail -2000 > "$d/journal-docker.txt" 2>&1
+
+        # THE failure mode to look for first (see docs/KNOWN-ISSUES.md): the backend
+        # derives RUNNING/STOPPED solely from one Docker /events subscription that is
+        # never restarted. When it dies, every server freezes in AWAITING_UPDATE or
+        # STOPPING while its container is demonstrably fine. Extract the evidence
+        # into its own file so a red night is diagnosable at a glance.
+        grep -n -A 20 "Error in Docker event listener" "$d/cosy-backend.log" \
+          > "$d/docker-event-stream-errors.txt" 2>&1
+        if [ -s "$d/docker-event-stream-errors.txt" ]; then
+          echo "::warning::Backend lost its Docker event stream during this run \
+        — server statuses freeze in AWAITING_UPDATE/STOPPING. See \
+        results/diagnostics/docker-event-stream-errors.txt (PRODUCT bug, not a test flake)."
+        fi
+
+        # OOM-killer evidence: if the kernel reaped a container mid-run this is
+        # where it shows up (and explains "fetch failed" / stuck STOPPING).
+        sudo dmesg 2>/dev/null | tail -200 > "$d/dmesg.txt" 2>&1
+        sudo dmesg 2>/dev/null | grep -iE 'out of memory|killed process|oom' \
+          > "$d/dmesg-oom.txt" 2>&1
+
+        echo "--- disk ---";        cat "$d/df.txt"
+        echo "--- memory ---";      cat "$d/free.txt"
+        echo "--- containers ---";  cat "$d/docker-ps.txt"
+        echo "--- OOM matches ---"; cat "$d/dmesg-oom.txt"
+        echo "--- docker event-stream errors ---"; cat "$d/docker-event-stream-errors.txt"
+        exit 0
+
+    - name: Download uninstall_cosy.sh
+      if: always()
+      shell: bash
+      run: |
+        curl -fsSL \
+          https://raw.githubusercontent.com/Magenta-Mause/Cosy/main/uninstall_cosy.sh \
+          -o uninstall_cosy.sh
+
+    - name: Uninstall Cosy
+      if: always()
+      shell: bash
+      run: sudo bash uninstall_cosy.sh docker -y
+
+    # Teardown is itself a tested feature: assert nothing is left behind and append
+    # an `uninstall` row to the summary the runner wrote. The caller's push step runs
+    # after this one, so that row reaches SigNoz along with every spec's row.
+    - name: Assert clean teardown
+      if: always()
+      shell: bash
+      working-directory: ${{ steps.locate.outputs.root }}
+      env:
+        INSTALL_DIR: ${{ inputs.install-dir }}
+      run: |
+        start=$(date +%s)
+        status="passed"
+
+        leftover_containers=$(docker ps -a --format '{{.Names}}' | grep '^cosy-' || true)
+        if [ -n "$leftover_containers" ]; then
+          echo "FAIL: leftover cosy-* containers:"; echo "$leftover_containers"
+          status="failed"
+        fi
+
+        # Named volumes defined by the compose stack (postgres-data, loki-data,
+        # influx_data/config, caddy_data/config). Relies on the fresh-VM
+        # assumption: nothing else on this runner creates these names, so any
+        # survivor means the uninstaller left volumes behind.
+        leftover_volumes=$(docker volume ls --format '{{.Name}}' \
+          | grep -E 'postgres-data|loki-data|influx_|caddy_' || true)
+        if [ -n "$leftover_volumes" ]; then
+          echo "FAIL: leftover compose volumes:"; echo "$leftover_volumes"
+          status="failed"
+        fi
+
+        if [ -d "${INSTALL_DIR}" ]; then
+          echo "FAIL: install dir ${INSTALL_DIR} still exists."
+          status="failed"
+        fi
+
+        # The uninstaller is supposed to remove the systemd service unit too.
+        if [ -f /etc/systemd/system/cosy.service ]; then
+          echo "FAIL: systemd unit /etc/systemd/system/cosy.service still exists."
+          status="failed"
+        fi
+
+        duration=$(( $(date +%s) - start ))
+        echo "uninstall assertion: ${status}"
+
+        # Append the uninstall feature row (summary.json exists if the runner ran).
+        if [ -f results/summary.json ]; then
+          tmp=$(mktemp)
+          jq --arg s "$status" --argjson d "$duration" \
+            '.features += [{"feature":"uninstall","status":$s,"durationSeconds":$d}]' \
+            results/summary.json > "$tmp" && mv "$tmp" results/summary.json
+        fi

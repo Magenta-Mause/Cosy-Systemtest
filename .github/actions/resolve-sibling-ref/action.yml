@@ -1,0 +1,89 @@
+name: Resolve sibling Cosy ref
+description: >-
+  Decide which ref of a sibling Cosy repository belongs to the pull request being gated
+  (explicit override → open PR → branch → shared cosy-<N> ticket → default branch).
+
+# All of the logic lives in resolve.sh rather than inline YAML: it is unit-tested
+# (see docs/pr-gate.md) and shellcheck-clean, neither of which is possible for a `run:`
+# block embedded in an action. Keep it that way.
+
+inputs:
+  sibling-repo:
+    description: "The repository to resolve a ref IN, as `owner/name` (e.g. magenta-mause/cosy-backend)."
+    required: true
+  head-ref:
+    description: "The head branch name of the pull request being gated."
+    required: true
+  override-key:
+    description: >-
+      PR-body key that overrides resolution, e.g. `Backend-Ref`. Named per sibling so a
+      PR can pin the frontend and the backend independently.
+    required: true
+  pr-body:
+    description: "The pull request body, searched for `<override-key>: <ref>`."
+    required: false
+    default: ""
+  github-token:
+    description: >-
+      Token for `gh api`. The default job token suffices while every Cosy repo is
+      public — reading another repo's open PRs needs no extra scope. If one is ever
+      made private this is where the failure will land, as an empty PR list rather
+      than an error, so the resolution would silently degrade to `default-branch`.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  ref:
+    description: "The resolved ref in the sibling repository."
+    value: ${{ steps.resolve.outputs.ref }}
+  repository:
+    description: >-
+      The repository the ref actually lives in, as `owner/name`. Differs from
+      `sibling-repo` when the match came from a fork's pull request — check this out,
+      not the upstream, or you build the wrong code.
+    value: ${{ steps.resolve.outputs.repository }}
+  reason:
+    description: "explicit-override | open-pr | branch | ticket-token | default-branch."
+    value: ${{ steps.resolve.outputs.reason }}
+  matched:
+    description: >-
+      `true` when a sibling belonging to this PR was found, `false` when it fell back to
+      the default branch. Callers build a sibling image only when this is `true`.
+    value: ${{ steps.resolve.outputs.matched }}
+  pr-number:
+    description: "The sibling pull request number when the match came from one; empty otherwise."
+    value: ${{ steps.resolve.outputs['pr-number'] }}
+
+runs:
+  using: composite
+  steps:
+    # One header for the table, however many siblings get resolved in this job. The
+    # marker file is in RUNNER_TEMP because $GITHUB_STEP_SUMMARY is append-only — there
+    # is no way to ask whether the header is already there.
+    - name: Start the resolution summary
+      shell: bash
+      run: |
+        marker="${RUNNER_TEMP}/.cosy-sibling-summary-header"
+        if [ ! -f "$marker" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          {
+            echo "### Systemtest gate — resolved siblings"
+            echo ""
+            echo "| Repository | Ref | How | Sibling PR |"
+            echo "| --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          : > "$marker"
+        fi
+
+    - name: Resolve
+      id: resolve
+      shell: bash
+      env:
+        SIBLING_REPO: ${{ inputs.sibling-repo }}
+        HEAD_REF: ${{ inputs.head-ref }}
+        OVERRIDE_KEY: ${{ inputs.override-key }}
+        # Through the environment, never interpolated into the script: a PR body is
+        # attacker-controlled text on a fork PR, and `${{ }}` interpolation into a
+        # `run:` block is script injection.
+        PR_BODY: ${{ inputs.pr-body }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: bash "${GITHUB_ACTION_PATH}/resolve.sh"

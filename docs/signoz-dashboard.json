@@ -297,6 +297,28 @@
       "y": 46,
       "minW": 2,
       "minH": 2
+    },
+    {
+      "h": 1,
+      "i": "row-pr",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 49,
+      "minW": 2,
+      "minH": 2
+    },
+    {
+      "h": 6,
+      "i": "t-pr-runs",
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 50,
+      "minW": 2,
+      "minH": 2
     }
   ],
   "widgets": [
@@ -1967,8 +1989,8 @@
     },
     {
       "id": "t-runs",
-      "title": "Runs in window — run time, image tags, report, GitHub run & trace",
-      "description": "One row per RUN in the window: when it ran, which image pair it installed, and links to its Playwright report, its GitHub run and its trace. Backed by `cosy_platform_systemtest_run_info` (always 1) — the run-level labels live on THAT metric on purpose. Putting them on the per-feature metrics would give every run its own series, which is what made the count tiles read feature x run and made CosySystemtestFeatureFailing's two-run condition unsatisfiable. Sorted by `cosy.systemtest.run_at` descending: a fixed-width ISO 8601 UTC string sorts lexicographically in exactly chronological order.",
+      "title": "Runs in window — release & staging (run time, image tags, report, run & trace)",
+      "description": "One row per RUN in the window: when it ran, which image pair it installed, and links to its Playwright report, its GitHub run and its trace. Backed by `cosy_platform_systemtest_run_info` (always 1) — the run-level labels live on THAT metric on purpose. Putting them on the per-feature metrics would give every run its own series, which is what made the count tiles read feature x run and made CosySystemtestFeatureFailing's two-run condition unsatisfiable. Sorted by `cosy.systemtest.run_at` descending: a fixed-width ISO 8601 UTC string sorts lexicographically in exactly chronological order. Excludes channel=\"pr\": PR gate runs are far more frequent than the nightly and would bury it. They have their own table in the PR gate section below.",
       "panelTypes": "table",
       "query": {
         "id": "t-runs-q",
@@ -1991,7 +2013,20 @@
                 }
               ],
               "filters": {
-                "items": [],
+                "items": [
+                  {
+                    "id": "f-channel-!=-pr",
+                    "key": {
+                      "key": "channel",
+                      "dataType": "string",
+                      "type": "tag",
+                      "isColumn": false,
+                      "isJSON": false
+                    },
+                    "op": "!=",
+                    "value": "pr"
+                  }
+                ],
                 "op": "AND"
               },
               "functions": [],
@@ -2843,6 +2878,165 @@
       "timePreferance": "GLOBAL_TIME",
       "contextLinks": {
         "linksData": []
+      },
+      "selectedLogFields": [
+        {
+          "fieldContext": "log",
+          "name": "timestamp",
+          "signal": "logs",
+          "type": "log"
+        },
+        {
+          "fieldContext": "log",
+          "name": "body",
+          "signal": "logs",
+          "type": "log"
+        }
+      ],
+      "selectedTracesFields": [
+        {
+          "fieldContext": "resource",
+          "fieldDataType": "string",
+          "name": "service.name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "fieldDataType": "string",
+          "name": "name",
+          "signal": "traces"
+        },
+        {
+          "fieldContext": "span",
+          "name": "duration_nano",
+          "signal": "traces"
+        }
+      ]
+    },
+    {
+      "id": "row-pr",
+      "title": "PR gate — pull requests verified before merge (not the released product)",
+      "description": "Runs of the same suite against images built FROM a pull request, pushed under channel=\"pr\". Every release panel and alert on this dashboard pins channel=\"release\", so nothing here can page anyone or change the released view — a red row means a pull request is broken, not the product.\n\nDeliberately a run table and not pass/fail tiles: the per-feature metrics carry only `feature` and `channel` (convention 11 — run-varying labels on them are what made the count tiles read feature x run), so they CANNOT tell one pull request from another. A `last_over_time` tile would blend unrelated PRs and report whichever finished last. Open a row's trace for its per-feature detail.\n\nNo report link: a PR run keeps its Playwright report as a GitHub artifact rather than publishing it to the public bucket, so no hosted URL is derived.",
+      "panelTypes": "row"
+    },
+    {
+      "id": "t-pr-runs",
+      "title": "PR gate runs — pull request, image tags, GitHub run & trace",
+      "description": "One row per PR gate run. Backed by `cosy_platform_systemtest_run_info`, the only metric carrying run-level labels. `cosy.systemtest.pr_url` is what makes a row placeable — without it a row is a bare GitHub run id. Sorted by `cosy.systemtest.run_at` descending (fixed-width ISO 8601 UTC sorts lexicographically in chronological order).",
+      "panelTypes": "table",
+      "query": {
+        "id": "t-pr-runs-q",
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "queryName": "A",
+              "dataSource": "metrics",
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "aggregations": [
+                {
+                  "metricName": "cosy_platform_systemtest_run_info",
+                  "temporality": "unspecified",
+                  "timeAggregation": "latest",
+                  "spaceAggregation": "max",
+                  "reduceTo": "last"
+                }
+              ],
+              "filters": {
+                "items": [
+                  {
+                    "id": "f-channel-=-pr",
+                    "key": {
+                      "key": "channel",
+                      "dataType": "string",
+                      "type": "tag",
+                      "isColumn": false,
+                      "isJSON": false
+                    },
+                    "op": "=",
+                    "value": "pr"
+                  }
+                ],
+                "op": "AND"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "key": "cosy.systemtest.run_at",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "cosy.systemtest.pr_url",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "cosy.backend.image_tag",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "cosy.frontend.image_tag",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "cosy.systemtest.run_url",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "cosy.systemtest.trace_id",
+                  "type": "tag"
+                }
+              ],
+              "having": [],
+              "legend": "",
+              "limit": null,
+              "orderBy": [
+                {
+                  "columnName": "cosy.systemtest.run_at",
+                  "order": "desc"
+                }
+              ],
+              "selectColumns": []
+            }
+          ],
+          "queryFormulas": []
+        }
+      },
+      "yAxisUnit": "none",
+      "thresholds": [],
+      "columnUnits": {},
+      "customLegendColors": {},
+      "isStacked": false,
+      "fillSpans": false,
+      "nullZeroValues": "zero",
+      "opacity": "1",
+      "softMin": 0,
+      "softMax": 0,
+      "legendPosition": "bottom",
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "decimalPrecision": 0,
+      "timePreferance": "LAST_1_WEEK",
+      "contextLinks": {
+        "linksData": [
+          {
+            "id": "open-pull-request",
+            "label": "Open the pull request",
+            "url": "{{_cosy.systemtest.pr_url}}"
+          },
+          {
+            "id": "open-pr-run-trace",
+            "label": "Open this run's trace",
+            "url": "/trace/{{_cosy.systemtest.trace_id}}"
+          }
+        ]
       },
       "selectedLogFields": [
         {
