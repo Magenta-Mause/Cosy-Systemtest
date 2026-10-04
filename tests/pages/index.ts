@@ -14,4 +14,5 @@ export {
   PublicDashboardSettingsPage,
 } from './settings-pages';
 export { MetricsPage } from './metrics-page';
+export { NotificationDialog } from './notification-dialog';
 export { PublicDashboardView } from './public-dashboard-view';

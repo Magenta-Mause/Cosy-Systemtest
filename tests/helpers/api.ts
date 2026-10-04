@@ -44,6 +44,16 @@ export interface GameServer {
   access_groups?: AccessGroup[];
 }
 
+/**
+ * One published host port. `instance_port` is the port taken on the HOST, which is
+ * what two servers can collide on; `container_port` is the port inside the container.
+ */
+export interface PortMappingInput {
+  instance_port: number;
+  container_port: number;
+  protocol: 'TCP' | 'UDP';
+}
+
 export interface CreateGameServerInput {
   server_name: string;
   docker_image_name: string;
@@ -52,6 +62,8 @@ export interface CreateGameServerInput {
   memory_limit?: string;
   /** Container env vars (e.g. EULA/RCON for the itzg Minecraft server). */
   environment_variables?: Record<string, string>;
+  /** Published host ports — used by `port-conflict` to make two servers collide. */
+  port_mappings?: PortMappingInput[];
 }
 
 // ── Phase 2 wire types (snake_case, verified against backend DTOs) ────────────
@@ -240,6 +252,9 @@ export class ApiClient {
             ),
           }
         : {}),
+      // PortMapping's fields are multi-word → snake_case on the wire; `protocol` is
+      // a single-word enum field and stays as is.
+      ...(input.port_mappings ? { port_mappings: input.port_mappings } : {}),
     };
     return this.send<GameServer>('POST', '/game-server', body);
   }

@@ -49,6 +49,7 @@ roadmap.
 | `public-dashboard` | Configured public dashboard renders for a fresh **unauthenticated** viewer (`?view=public`) |
 | `settings-design` | General settings (server name) + server-card design persist across reload |
 | `event-stream-resilience` | After several servers are **deleted while their containers run**, a normal stop on a surviving server is still observed by the backend — the regression guard for the lost Docker event stream |
+| `port-conflict` | Starting a server whose host port another running server already holds is refused with the port named in the UI, and the blocked server never comes up |
 
 **About `event-stream-resilience`.** It is the one spec that provokes a failure instead of
 waiting to meet one. It brings a control server to RUNNING (proving the backend's Docker
